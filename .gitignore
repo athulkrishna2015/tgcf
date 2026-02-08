@@ -1,0 +1,21 @@
+# Virtual Environment
+.venv/
+venv/
+ENV/
+
+# Secrets and Config
+.env
+tgcf.config.json
+tgcf.config_bkp.json
+*.session
+*.session-journal
+
+# Logs and Temp
+*.log
+*.txt
+__pycache__/
+*.pyc
+.fuse_hidden*
+
+# OS files
+.DS_Store
