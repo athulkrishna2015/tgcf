@@ -35,3 +35,17 @@ Run in live mode:
 ```bash
 tgcf live
 ```
+
+## Running on GitHub Actions
+
+This repository includes a GitHub Actions workflow to run `tgcf past` every hour.
+
+### Configuration
+To use it, add the following **Secrets** to your GitHub repository:
+- `API_ID`: Your Telegram API ID.
+- `API_HASH`: Your Telegram API Hash.
+- `SESSION_STRING`: Your Telegram Session String.
+- `TGCF_CONFIG_JSON`: The full content of your `tgcf.config.json`.
+
+### Note on Persistence
+GitHub Actions does not save changes to the `tgcf.config.json` file across runs. If you need to keep track of the message `offset`, consider using the **MongoDB** integration by setting the `MONGO_CON_STR` environment variable.
