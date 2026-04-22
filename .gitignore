@@ -13,6 +13,7 @@ tgcf.config_bkp.json
 # Logs and Temp
 *.log
 *.txt
+!requirements.txt
 __pycache__/
 *.pyc
 .fuse_hidden*

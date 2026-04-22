@@ -34,56 +34,65 @@ async def forward_job() -> None:
     ) as client:
         config.from_to = await config.load_from_to(client, config.CONFIG.forwards)
         client: TelegramClient
+        unavailable_channels = []
         for from_to, forward in zip(config.from_to.items(), config.CONFIG.forwards):
             src, dest = from_to
             last_id = 0
             forward: config.Forward
             logging.info(f"Forwarding messages from {src} to {dest}")
-            async for message in client.iter_messages(
-                src, reverse=True, offset_id=forward.offset
-            ):
-                message: Message
-                event = st.DummyEvent(message.chat_id, message.id)
-                event_uid = st.EventUid(event)
+            try:
+                async for message in client.iter_messages(
+                    src, reverse=True, offset_id=forward.offset
+                ):
+                    message: Message
+                    event = st.DummyEvent(message.chat_id, message.id)
+                    event_uid = st.EventUid(event)
 
-                if forward.end and last_id > forward.end:
-                    continue
-                if isinstance(message, MessageService):
-                    continue
-                try:
-                    tm = await apply_plugins(message)
-                    if not tm:
+                    if forward.end and last_id > forward.end:
                         continue
-                    st.stored[event_uid] = {}
+                    if isinstance(message, MessageService):
+                        continue
+                    try:
+                        tm = await apply_plugins(message)
+                        if not tm:
+                            continue
+                        st.stored[event_uid] = {}
 
-                    if message.is_reply:
-                        r_event = st.DummyEvent(
-                            message.chat_id, message.reply_to_msg_id
+                        if message.is_reply:
+                            r_event = st.DummyEvent(
+                                message.chat_id, message.reply_to_msg_id
+                            )
+                            r_event_uid = st.EventUid(r_event)
+                        for d in dest:
+                            if message.is_reply and r_event_uid in st.stored:
+                                tm.reply_to = st.stored.get(r_event_uid).get(d)
+                            fwded_msg = await send_message(d, tm)
+                            st.stored[event_uid].update({d: fwded_msg.id})
+                        tm.clear()
+                        last_id = message.id
+                        logging.info(f"forwarding message with id = {last_id}")
+                        forward.offset = last_id
+                        write_config(CONFIG, persist=False)
+                        time.sleep(CONFIG.past.delay)
+                        logging.info(f"slept for {CONFIG.past.delay} seconds")
+
+                    except ChatForwardsRestrictedError:
+                        logging.warning(
+                            f"Skipping message {message.id} in {src}: chat is protected."
                         )
-                        r_event_uid = st.EventUid(r_event)
-                    for d in dest:
-                        if message.is_reply and r_event_uid in st.stored:
-                            tm.reply_to = st.stored.get(r_event_uid).get(d)
-                        fwded_msg = await send_message(d, tm)
-                        st.stored[event_uid].update({d: fwded_msg.id})
-                    tm.clear()
-                    last_id = message.id
-                    logging.info(f"forwarding message with id = {last_id}")
-                    forward.offset = last_id
-                    write_config(CONFIG, persist=False)
-                    time.sleep(CONFIG.past.delay)
-                    logging.info(f"slept for {CONFIG.past.delay} seconds")
-
-                except ChatForwardsRestrictedError:
-                    logging.warning(
-                        f"Skipping message {message.id} in {src}: chat is protected."
-                    )
-                    last_id = message.id
-                    forward.offset = last_id
-                    write_config(CONFIG, persist=False)
-                    continue
-                except FloodWaitError as fwe:
-                    logging.info(f"Sleeping for {fwe}")
-                    await asyncio.sleep(delay=fwe.seconds)
-                except Exception as err:
-                    logging.exception(err)
+                        last_id = message.id
+                        forward.offset = last_id
+                        write_config(CONFIG, persist=False)
+                        continue
+                    except FloodWaitError as fwe:
+                        logging.info(f"Sleeping for {fwe}")
+                        await asyncio.sleep(delay=fwe.seconds)
+                    except Exception as err:
+                        logging.exception(err)
+            except ValueError as err:
+                logging.error(f"Could not access source {src}: {err}")
+                unavailable_channels.append(str(src))
+                continue
+                
+        if unavailable_channels:
+            logging.error(f"Finished past mode. The following source chats were unavailable: {', '.join(unavailable_channels)}")
