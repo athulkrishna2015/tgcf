@@ -5,7 +5,7 @@ import logging
 import yaml
 from telethon import events
 
-from tgcf import config, const, plugins
+from tgcf import config
 from tgcf.bot.utils import (
     admin_protect,
     display_forwards,
@@ -43,7 +43,7 @@ async def forward_command_handler(event):
         forward = config.Forward(**parsed_args)
         try:
             remove_source(forward.source, config.CONFIG.forwards)
-        except:
+        except Exception:
             pass
         CONFIG.forwards.append(forward)
         config.from_to = await config.load_from_to(event.client, config.CONFIG.forwards)
@@ -133,7 +133,7 @@ async def help_command_handler(event):
 
 def get_events():
     _ = get_command_prefix()
-    logging.info(f"Command prefix is . for userbot and / for bot")
+    logging.info("Command prefix is . for userbot and / for bot")
     command_events = {
         "start": (start_command_handler, events.NewMessage(pattern=f"{_}start")),
         "forward": (forward_command_handler, events.NewMessage(pattern=f"{_}forward")),

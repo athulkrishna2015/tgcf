@@ -6,7 +6,6 @@ Contains all the first-party tgcf plugins.
 
 import inspect
 import logging
-from enum import Enum
 from importlib import import_module
 from typing import Any, Dict
 
@@ -67,7 +66,7 @@ def load_plugins() -> Dict[str, TgcfPlugin]:
     _plugins = {}
     for item in PLUGINS:
         plugin_id = item[0]
-        if item[1].check == False:
+        if not item[1].check:
             continue
 
         plugin_class_name = f"Tgcf{plugin_id.title()}"

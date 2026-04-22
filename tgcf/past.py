@@ -39,7 +39,13 @@ async def forward_job() -> None:
             src, dest = from_to
             last_id = 0
             forward: config.Forward
-            logging.info(f"Forwarding messages from {src} to {dest}")
+            try:
+                src_entity = await client.get_entity(src)
+                real_name = getattr(src_entity, 'title', getattr(src_entity, 'username', str(src)))
+            except Exception:
+                real_name = str(src)
+            con_name = forward.con_name if forward.con_name else "Unnamed"
+            logging.info(f"Forwarding messages from {src} (Real Name: {real_name}, Config: {con_name}) to {dest}")
             try:
                 async for message in client.iter_messages(
                     src, reverse=True, offset_id=forward.offset
@@ -89,9 +95,11 @@ async def forward_job() -> None:
                         await asyncio.sleep(delay=fwe.seconds)
                     except Exception as err:
                         logging.exception(err)
+                logging.info(f"Finished forwarding messages from {src} (Real Name: {real_name}, Config: {con_name})")
             except ValueError as err:
-                logging.error(f"Could not access source {src}: {err}")
-                unavailable_channels.append(str(src))
+                name = forward.con_name if forward.con_name else str(src)
+                logging.error(f"Could not access source {src} ({name}): {err}")
+                unavailable_channels.append(f"{src} ({name})")
                 continue
                 
         if unavailable_channels:

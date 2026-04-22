@@ -1,0 +1,40 @@
+name: Run tgcf
+
+on:
+  schedule:
+    - cron: '0 * * * *'  # Runs every hour
+  workflow_dispatch:      # Allows manual trigger
+
+jobs:
+  run-tgcf:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12' # Stable version
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -e .
+
+      - name: Setup Configuration
+        run: |
+          echo '${{ secrets.TGCF_CONFIG_JSON }}' > tgcf.config.json
+        env:
+          TGCF_CONFIG_JSON: ${{ secrets.TGCF_CONFIG_JSON }}
+
+      - name: Run tgcf
+        run: |
+          tgcf past
+        env:
+          API_ID: ${{ secrets.API_ID }}
+          API_HASH: ${{ secrets.API_HASH }}
+          SESSION_STRING: ${{ secrets.SESSION_STRING }}
+          LOUD: True

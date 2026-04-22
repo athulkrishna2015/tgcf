@@ -1,12 +1,10 @@
 """The module responsible for operating tgcf in live mode."""
 
 import logging
-import os
 import sys
 from typing import Union
 
 from telethon import TelegramClient, events, functions, types
-from telethon.sessions import StringSession
 from telethon.tl.custom.message import Message
 
 from tgcf import config, const
@@ -37,11 +35,14 @@ async def new_message_handler(event: Union[Message, events.NewMessage]) -> None:
             break
 
     dest = config.from_to.get(chat_id)
+    if not dest:
+        return
 
     tm = await apply_plugins(message)
     if not tm:
         return
 
+    r_event_uid = None
     if event.is_reply:
         r_event = st.DummyEvent(chat_id, event.reply_to_msg_id)
         r_event_uid = st.EventUid(r_event)
@@ -49,7 +50,9 @@ async def new_message_handler(event: Union[Message, events.NewMessage]) -> None:
     st.stored[event_uid] = {}
     for d in dest:
         if event.is_reply and r_event_uid in st.stored:
-            tm.reply_to = st.stored.get(r_event_uid).get(d)
+            r_stored = st.stored.get(r_event_uid)
+            if r_stored:
+                tm.reply_to = r_stored.get(d)
         fwded_msg = await send_message(d, tm)
         st.stored[event_uid].update({d: fwded_msg})
     tm.clear()
@@ -85,6 +88,8 @@ async def edited_message_handler(event) -> None:
         return
 
     dest = config.from_to.get(chat_id)
+    if not dest:
+        return
 
     for d in dest:
         await send_message(d, tm)

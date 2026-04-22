@@ -50,3 +50,14 @@ To use it, add the following **Secrets** to your GitHub repository:
 
 ### Note on Persistence
 GitHub Actions does not save changes to the `tgcf.config.json` file across runs. If you need to keep track of the message `offset`, consider using the **MongoDB** integration by setting the `MONGO_CON_STR` environment variable.
+
+## Changelog
+
+### 2026-04-22
+- build: add setup.py to support editable installations
+- docs: add graceful channel handling to features list
+- fix(past): gracefully handle missing source channel entities
+
+### 2026-02-09
+- Update README with GitHub Actions instructions
+- Initial commit: Customized tgcf with bug fixes and improved error handling
