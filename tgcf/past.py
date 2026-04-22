@@ -58,43 +58,49 @@ async def forward_job() -> None:
                         continue
                     if isinstance(message, MessageService):
                         continue
-                    try:
-                        tm = await apply_plugins(message)
-                        if not tm:
-                            continue
-                        st.stored[event_uid] = {}
+                    while True:
+                        try:
+                            tm = await apply_plugins(message)
+                            if not tm:
+                                break
+                            st.stored[event_uid] = {}
 
-                        if message.is_reply:
-                            r_event = st.DummyEvent(
-                                message.chat_id, message.reply_to_msg_id
+                            if message.is_reply:
+                                r_event = st.DummyEvent(
+                                    message.chat_id, message.reply_to_msg_id
+                                )
+                                r_event_uid = st.EventUid(r_event)
+                            for d in dest:
+                                if message.is_reply and r_event_uid in st.stored:
+                                    tm.reply_to = st.stored.get(r_event_uid).get(d)
+                                fwded_msg = await send_message(d, tm)
+                                st.stored[event_uid].update({d: fwded_msg.id})
+                            tm.clear()
+                            last_id = message.id
+                            logging.info(f"forwarding message with id = {last_id}")
+                            forward.offset = last_id
+                            write_config(CONFIG, persist=False)
+                            time.sleep(CONFIG.past.delay)
+                            logging.info(f"slept for {CONFIG.past.delay} seconds")
+                            break  # success, move to next message
+
+                        except ChatForwardsRestrictedError:
+                            logging.warning(
+                                f"Skipping message {message.id} in {src}: chat is protected."
                             )
-                            r_event_uid = st.EventUid(r_event)
-                        for d in dest:
-                            if message.is_reply and r_event_uid in st.stored:
-                                tm.reply_to = st.stored.get(r_event_uid).get(d)
-                            fwded_msg = await send_message(d, tm)
-                            st.stored[event_uid].update({d: fwded_msg.id})
-                        tm.clear()
-                        last_id = message.id
-                        logging.info(f"forwarding message with id = {last_id}")
-                        forward.offset = last_id
-                        write_config(CONFIG, persist=False)
-                        time.sleep(CONFIG.past.delay)
-                        logging.info(f"slept for {CONFIG.past.delay} seconds")
-
-                    except ChatForwardsRestrictedError:
-                        logging.warning(
-                            f"Skipping message {message.id} in {src}: chat is protected."
-                        )
-                        last_id = message.id
-                        forward.offset = last_id
-                        write_config(CONFIG, persist=False)
-                        continue
-                    except FloodWaitError as fwe:
-                        logging.info(f"Sleeping for {fwe}")
-                        await asyncio.sleep(delay=fwe.seconds)
-                    except Exception as err:
-                        logging.exception(err)
+                            last_id = message.id
+                            forward.offset = last_id
+                            write_config(CONFIG, persist=False)
+                            break  # skip this message
+                        except FloodWaitError as fwe:
+                            logging.warning(
+                                f"FloodWait: sleeping for {fwe.seconds}s before retrying message {message.id}"
+                            )
+                            await asyncio.sleep(delay=fwe.seconds)
+                            # loop continues — retries the same message
+                        except Exception as err:
+                            logging.exception(err)
+                            break  # skip on unknown error
                 logging.info(f"Finished forwarding messages from {src} (Real Name: {real_name}, Config: {con_name})")
             except ValueError as err:
                 name = forward.con_name if forward.con_name else str(src)
