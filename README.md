@@ -6,6 +6,7 @@ A customized version of `tgcf` for automated telegram message forwarding.
 - Forward messages from past history or live.
 - Filter messages based on text, users, or file types.
 - Supports protected chats (gracefully skips restricted content).
+- Gracefully handles unavailable or missing source channels by skipping them and reporting errors at the end.
 - Robust ID handling for different Telegram peer formats.
 
 ## Setup
