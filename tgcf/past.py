@@ -35,6 +35,7 @@ async def forward_job() -> None:
         config.from_to = await config.load_from_to(client, config.CONFIG.forwards)
         client: TelegramClient
         unavailable_channels = []
+        finished_channels = []
         for from_to, forward in zip(config.from_to.items(), config.CONFIG.forwards):
             src, dest = from_to
             last_id = 0
@@ -93,14 +94,19 @@ async def forward_job() -> None:
                             write_config(CONFIG, persist=False)
                             break  # skip this message
                         except FloodWaitError as fwe:
+                            # Build a direct Telegram link to the message
+                            # Private supergroup IDs are like -100XXXXXXXXX; strip the -100 prefix
+                            channel_id = str(src).replace("-100", "")
+                            msg_link = f"https://t.me/c/{channel_id}/{message.id}"
                             logging.warning(
-                                f"FloodWait: sleeping for {fwe.seconds}s before retrying message {message.id}"
+                                f"FloodWait: sleeping for {fwe.seconds}s before retrying — {msg_link}"
                             )
                             await asyncio.sleep(delay=fwe.seconds)
                             # loop continues — retries the same message
                         except Exception as err:
                             logging.exception(err)
                             break  # skip on unknown error
+                finished_channels.append(f"{src} ({real_name} / {con_name})")
                 logging.info(f"Finished forwarding messages from {src} (Real Name: {real_name}, Config: {con_name})")
             except ValueError as err:
                 name = forward.con_name if forward.con_name else str(src)
@@ -108,5 +114,11 @@ async def forward_job() -> None:
                 unavailable_channels.append(f"{src} ({name})")
                 continue
                 
+        if finished_channels:
+            logging.info("=== Past mode complete. Channels processed: ===")
+            for ch in finished_channels:
+                logging.info(f"  ✓ {ch}")
         if unavailable_channels:
-            logging.error(f"Finished past mode. The following source chats were unavailable: {', '.join(unavailable_channels)}")
+            logging.error("=== Unavailable channels (could not access): ===")
+            for ch in unavailable_channels:
+                logging.error(f"  ✗ {ch}")
