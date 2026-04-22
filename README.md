@@ -54,9 +54,14 @@ GitHub Actions does not save changes to the `tgcf.config.json` file across runs.
 ## Changelog
 
 ### 2026-04-22
-- build: add setup.py to support editable installations
-- docs: add graceful channel handling to features list
-- fix(past): gracefully handle missing source channel entities
+- fix(logs): show real Telegram channel name and config name in start/finish logs; fallback to config name for inaccessible channels
+- fix(past): gracefully skip unavailable source channels and report them in a summary at the end
+- fix(live): add null safety guards for missing `dest` and unbound `r_event_uid`
+- fix(bot/utils): fix invalid escape sequence `"\."` → `r"\."`
+- fix(config): replace deprecated `logging.warn` with `logging.warning`; fix trailing whitespace
+- fix(plugins): remove unused `Enum` import; fix `== False` comparison
+- build: add `setup.py` to support editable installs (`pip install -e .`)
+- docs: add Graceful Channel Handling section to features list
 
 ### 2026-02-09
 - Update README with GitHub Actions instructions
