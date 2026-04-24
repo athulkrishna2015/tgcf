@@ -8,6 +8,8 @@ A customized version of `tgcf` for automated telegram message forwarding.
 - Supports protected chats (gracefully skips restricted content).
 - Gracefully handles unavailable or missing source channels by skipping them and reporting errors at the end.
 - Robust ID handling for different Telegram peer formats.
+- **Resilient mode**: automatically reconnects and resumes after network outages (`tgcf past --resilient`).
+- Detailed logging: shows real Telegram channel names, message links for FloodWait retries, and a full summary on completion.
 
 ## Setup
 
@@ -32,6 +34,15 @@ Run in past mode:
 tgcf past
 ```
 
+Run in past mode with automatic network recovery:
+```bash
+tgcf past --resilient
+# or
+tgcf past -r
+```
+If the connection drops, tgcf will wait 30 seconds and reconnect automatically.
+Progress is saved to disk, so it always resumes from the last forwarded message.
+
 Run in live mode:
 ```bash
 tgcf live
@@ -52,6 +63,12 @@ To use it, add the following **Secrets** to your GitHub repository:
 GitHub Actions does not save changes to the `tgcf.config.json` file across runs. If you need to keep track of the message `offset`, consider using the **MongoDB** integration by setting the `MONGO_CON_STR` environment variable.
 
 ## Changelog
+
+### 2026-04-24
+- feat(past): add `--resilient` / `-r` flag for automatic reconnect and resume on network failure
+- feat(past): retry same message after FloodWait instead of skipping it
+- feat(past): show direct Telegram message link in FloodWait warning log
+- feat(past): print finished channel summary and unavailable channel list at end of run
 
 ### 2026-04-22
 - fix(logs): show real Telegram channel name and config name in start/finish logs; fallback to config name for inaccessible channels
