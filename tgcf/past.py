@@ -20,8 +20,16 @@ from tgcf.plugins import apply_plugins
 from tgcf.utils import clean_session_files, send_message
 
 
-async def forward_job() -> None:
-    """Forward all existing messages in the concerned chats."""
+NETWORK_RETRY_DELAY = 30  # seconds to wait before retrying after a network error
+
+
+async def forward_job(resilient: bool = False) -> None:
+    """Forward all existing messages in the concerned chats.
+
+    Args:
+        resilient: If True, automatically retry on network errors instead of crashing.
+                   Progress is preserved via saved offsets, so it resumes from last point.
+    """
     clean_session_files()
     if CONFIG.login.user_type != 1:
         logging.warning(
@@ -29,6 +37,27 @@ async def forward_job() -> None:
         )
         return
     SESSION = get_SESSION()
+
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            await _run_forward_job(SESSION)
+            break  # completed successfully
+        except (ConnectionError, OSError) as err:
+            if not resilient:
+                raise
+            logging.error(
+                f"Network error on attempt {attempt}: {err}\n"
+                f"Retrying in {NETWORK_RETRY_DELAY}s... (progress is saved, will resume from last offset)"
+            )
+            await asyncio.sleep(NETWORK_RETRY_DELAY)
+        except Exception as err:
+            raise  # non-network errors always propagate
+
+
+async def _run_forward_job(SESSION) -> None:
+    """Core forwarding logic — runs one full pass through all channels."""
     async with TelegramClient(
         SESSION, CONFIG.login.API_ID, CONFIG.login.API_HASH
     ) as client:

@@ -101,6 +101,12 @@ def main(
         callback=version_callback,
         help="Show version and exit.",
     ),
+    resilient: bool = typer.Option(
+        False,
+        "--resilient",
+        "-r",
+        help="(past mode only) Automatically retry on network errors and resume from last offset.",
+    ),
 ):
     """The ultimate tool to automate custom telegram message forwarding.
 
@@ -117,7 +123,7 @@ def main(
     if mode == Mode.PAST:
         from tgcf.past import forward_job  # pylint: disable=import-outside-toplevel
 
-        asyncio.run(forward_job())
+        asyncio.run(forward_job(resilient=resilient))
     else:
         from tgcf.live import start_sync  # pylint: disable=import-outside-toplevel
 
