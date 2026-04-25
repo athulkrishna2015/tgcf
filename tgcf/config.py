@@ -68,8 +68,7 @@ class LoginConfig(BaseModel):
     phone_no: int = 91
     USERNAME: str = ""
     SESSION_STRING: str = ""
-    BOT_TOKEN: str = ""
-    HELPER_BOT_TOKEN: str = ""  # Optional: bot token used as a helper sender in past mode
+    BOT_TOKEN: str = ""  # Also used as helper bot sender in past mode when user_type=1
 
 
 class BotMessages(BaseModel):

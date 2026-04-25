@@ -59,18 +59,18 @@ async def _run_forward_job(SESSION, resilient: bool = False) -> None:
         connection_retries=connection_retries,
         retry_delay=30,
     ) as client:
-        # Initialize helper bot if token is configured
+        # Initialize helper bot if BOT_TOKEN is configured (and we're running as user account)
         helper_bot = None
-        if CONFIG.login.HELPER_BOT_TOKEN:
+        if CONFIG.login.BOT_TOKEN:
             helper_bot = TelegramClient(
                 "helper_bot", CONFIG.login.API_ID, CONFIG.login.API_HASH,
                 connection_retries=connection_retries,
                 retry_delay=30,
             )
-            await helper_bot.start(bot_token=CONFIG.login.HELPER_BOT_TOKEN)
+            await helper_bot.start(bot_token=CONFIG.login.BOT_TOKEN)
             logging.info("Helper bot started — will take over sending on primary FloodWait.")
         else:
-            logging.info("No HELPER_BOT_TOKEN configured — running without helper bot.")
+            logging.info("No BOT_TOKEN configured — running without helper bot.")
         config.from_to = await config.load_from_to(client, config.CONFIG.forwards)
         client: TelegramClient
         unavailable_channels = []
