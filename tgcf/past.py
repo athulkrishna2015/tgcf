@@ -123,7 +123,9 @@ async def _run_forward_job(SESSION, resilient: bool = False) -> None:
                         continue
 
                     r_event_uid = None
-                    active_sender = None   # None = primary client; helper_bot = bot
+                    # Prefer bot if available; fall back to primary on bot FloodWait
+                    active_sender = helper_bot  # None = primary; helper_bot = bot
+                    bot_flood_until = 0.0      # timestamp when bot's ban expires
                     primary_flood_until = 0.0  # timestamp when primary's ban expires
                     while True:
                         try:
@@ -166,41 +168,44 @@ async def _run_forward_job(SESSION, resilient: bool = False) -> None:
                             msg_link = f"https://t.me/c/{channel_id}/{message.id}"
                             resume_time = time.time() + fwe.seconds
 
-                            if active_sender is not helper_bot:
-                                # Primary hit FloodWait
+                            if active_sender is helper_bot:
+                                # Bot hit FloodWait — fall back to primary if available
+                                bot_flood_until = resume_time
+                                if time.time() >= primary_flood_until:
+                                    logging.warning(
+                                        f"Bot FloodWait {fwe.seconds}s — falling back to primary: {msg_link}"
+                                    )
+                                    active_sender = None  # use primary
+                                    # Retry immediately with primary (loop continues)
+                                else:
+                                    # Primary also rate-limited — defer
+                                    earliest = min(primary_flood_until, resume_time)
+                                    logging.warning(
+                                        f"Bot FloodWait {fwe.seconds}s — both accounts rate-limited: {msg_link}\n"
+                                        f"  Skipping to next source. Will resume in {earliest - time.time():.0f}s."
+                                    )
+                                    active_sender = helper_bot  # reset to preferred for next attempt
+                                    queue.append((earliest, forward, src, dest))
+                                    flood_wait_hit = True
+                                    break
+
+                            else:
+                                # Primary hit FloodWait — try switching to bot if available
                                 primary_flood_until = resume_time
-                                if helper_bot:
+                                if helper_bot and time.time() >= bot_flood_until:
                                     logging.warning(
                                         f"Primary FloodWait {fwe.seconds}s — switching to helper bot: {msg_link}"
                                     )
                                     active_sender = helper_bot
                                     # Retry immediately with bot (loop continues)
                                 else:
-                                    # No helper bot configured — defer
+                                    # No bot or bot also rate-limited — defer
+                                    earliest = min(primary_flood_until, bot_flood_until) if helper_bot else primary_flood_until
                                     logging.warning(
-                                        f"Primary FloodWait {fwe.seconds}s — {msg_link}\n"
-                                        f"  Skipping to next source. Will resume after wait expires."
-                                    )
-                                    queue.append((resume_time, forward, src, dest))
-                                    flood_wait_hit = True
-                                    break
-
-                            else:
-                                # Bot hit FloodWait — check if primary has recovered
-                                if time.time() >= primary_flood_until:
-                                    logging.warning(
-                                        f"Bot FloodWait {fwe.seconds}s — primary available again, falling back: {msg_link}"
-                                    )
-                                    active_sender = None  # fall back to primary
-                                    # Retry immediately with primary (loop continues)
-                                else:
-                                    # Both rate-limited — defer until earliest recovery
-                                    earliest = min(primary_flood_until, resume_time)
-                                    logging.warning(
-                                        f"Bot FloodWait {fwe.seconds}s — both accounts rate-limited: {msg_link}\n"
+                                        f"Primary FloodWait {fwe.seconds}s — both accounts rate-limited: {msg_link}\n"
                                         f"  Skipping to next source. Will resume in {earliest - time.time():.0f}s."
                                     )
-                                    active_sender = None  # reset for next attempt
+                                    active_sender = helper_bot  # reset to preferred for next attempt
                                     queue.append((earliest, forward, src, dest))
                                     flood_wait_hit = True
                                     break
