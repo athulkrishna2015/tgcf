@@ -27,8 +27,9 @@ async def forward_job(resilient: bool = False) -> None:
     """Forward all existing messages in the concerned chats.
 
     Args:
-        resilient: If True, automatically retry on network errors instead of crashing.
-                   Progress is preserved via saved offsets, so it resumes from last point.
+        resilient: If True, Telethon will retry connecting forever on network errors
+                   instead of giving up after 5 attempts. Progress is preserved via
+                   saved offsets, so it always resumes from the last forwarded message.
     """
     clean_session_files()
     if CONFIG.login.user_type != 1:
@@ -37,29 +38,21 @@ async def forward_job(resilient: bool = False) -> None:
         )
         return
     SESSION = get_SESSION()
-
-    attempt = 0
-    while True:
-        attempt += 1
-        try:
-            await _run_forward_job(SESSION)
-            break  # completed successfully
-        except (ConnectionError, OSError) as err:
-            if not resilient:
-                raise
-            logging.error(
-                f"Network error on attempt {attempt}: {err}\n"
-                f"Retrying in {NETWORK_RETRY_DELAY}s... (progress is saved, will resume from last offset)"
-            )
-            await asyncio.sleep(NETWORK_RETRY_DELAY)
-        except Exception as err:
-            raise  # non-network errors always propagate
+    await _run_forward_job(SESSION, resilient=resilient)
 
 
-async def _run_forward_job(SESSION) -> None:
+async def _run_forward_job(SESSION, resilient: bool = False) -> None:
     """Core forwarding logic — runs one full pass through all channels."""
+    # connection_retries=-1 means Telethon retries forever (used in resilient mode)
+    connection_retries = -1 if resilient else 5
+    if resilient:
+        logging.info(
+            "Resilient mode ON: will retry connecting indefinitely if network drops."
+        )
     async with TelegramClient(
-        SESSION, CONFIG.login.API_ID, CONFIG.login.API_HASH
+        SESSION, CONFIG.login.API_ID, CONFIG.login.API_HASH,
+        connection_retries=connection_retries,
+        retry_delay=30,
     ) as client:
         config.from_to = await config.load_from_to(client, config.CONFIG.forwards)
         client: TelegramClient
