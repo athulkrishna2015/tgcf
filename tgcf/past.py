@@ -9,7 +9,7 @@ import logging
 import time
 
 from telethon import TelegramClient
-from telethon.errors.rpcerrorlist import ChatForwardsRestrictedError, FloodWaitError
+from telethon.errors.rpcerrorlist import ChatForwardsRestrictedError, FloodWaitError, MediaEmptyError
 from telethon.tl.custom.message import Message
 from telethon.tl.patched import MessageService
 
@@ -209,6 +209,24 @@ async def _run_forward_job(SESSION, resilient: bool = False) -> None:
                                     queue.append((earliest, forward, src, dest))
                                     flood_wait_hit = True
                                     break
+
+                        except MediaEmptyError:
+                            if active_sender is helper_bot:
+                                # Bot can't reference media from user's session — fall back to primary
+                                logging.warning(
+                                    f"Bot cannot send media for message {message.id} "
+                                    f"(media reference is tied to user session) — falling back to primary."
+                                )
+                                active_sender = None  # retry with primary
+                            else:
+                                # Primary also can't send this media — skip
+                                logging.warning(
+                                    f"Skipping message {message.id}: media is unavailable or expired."
+                                )
+                                last_id = message.id
+                                forward.offset = last_id
+                                write_config(CONFIG, persist=False)
+                                break
 
                         except Exception as err:
                             logging.exception(err)
