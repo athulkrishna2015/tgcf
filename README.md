@@ -9,6 +9,8 @@ A customized version of `tgcf` for automated telegram message forwarding.
 - Gracefully handles unavailable or missing source channels by skipping them and reporting errors at the end.
 - Robust ID handling for different Telegram peer formats.
 - **Resilient mode**: automatically reconnects and resumes after network outages (`tgcf past --resilient`).
+- **Deferred queue**: on FloodWait, skips to the next source channel and comes back — no blocking.
+- **Helper bot**: set `BOT_TOKEN` to have a bot handle text message sending; primary account used for media.
 - Detailed logging: shows real Telegram channel names, message links for FloodWait retries, and a full summary on completion.
 
 ## Setup
@@ -27,6 +29,11 @@ A customized version of `tgcf` for automated telegram message forwarding.
 4. **Configure:**
    - Copy `.env.example` to `.env` and add your credentials.
    - Create a `tgcf.config.json` with your forwarding rules.
+5. **(Optional) Helper bot:** Create a bot via `@BotFather`, add it as admin to all **destination** channels, then set `BOT_TOKEN` in `tgcf.config.json` under `login`:
+   ```json
+   "login": { "BOT_TOKEN": "123456:ABC-DEF..." }
+   ```
+   The bot handles text messages; the primary account handles media.
 
 ## Usage
 Run in past mode:
@@ -63,6 +70,14 @@ To use it, add the following **Secrets** to your GitHub repository:
 GitHub Actions does not save changes to the `tgcf.config.json` file across runs. If you need to keep track of the message `offset`, consider using the **MongoDB** integration by setting the `MONGO_CON_STR` environment variable.
 
 ## Changelog
+
+### 2026-04-26
+- feat(past): add helper bot support via `BOT_TOKEN` — bot handles text messages, primary handles media
+- feat(past): deferred queue — on FloodWait, skip to next source and resume after wait expires
+- feat(past): two-tier FloodWait handling — primary → bot → fall back to primary → defer queue
+- fix(past): catch `MediaEmptyError` from bot and fall back to primary; bots can't reference user-session media
+- fix(past): only use bot for text-only messages to avoid `MediaEmptyError` spam on media channels
+- refactor(past): reuse existing `BOT_TOKEN` for helper bot instead of separate `HELPER_BOT_TOKEN` field
 
 ### 2026-04-25
 - fix(past): fix `--resilient` mode — now uses `connection_retries=-1` so Telethon retries forever internally; the previous approach using a Python try/except loop failed because Telethon raises `ConnectionError` in a shielded background future that couldn't be caught
