@@ -123,7 +123,8 @@ async def _run_forward_job(SESSION, resilient: bool = False) -> None:
                         continue
 
                     r_event_uid = None
-                    active_sender = None  # None = use primary client; set to helper_bot on FloodWait
+                    active_sender = None   # None = primary client; helper_bot = bot
+                    primary_flood_until = 0.0  # timestamp when primary's ban expires
                     while True:
                         try:
                             tm = await apply_plugins(message)
@@ -165,24 +166,44 @@ async def _run_forward_job(SESSION, resilient: bool = False) -> None:
                             msg_link = f"https://t.me/c/{channel_id}/{message.id}"
                             resume_time = time.time() + fwe.seconds
 
-                            if helper_bot and active_sender is not helper_bot:
-                                # Primary hit FloodWait — switch to helper bot
-                                logging.warning(
-                                    f"Primary FloodWait {fwe.seconds}s — switching to helper bot for {msg_link}"
-                                )
-                                active_sender = helper_bot
-                                # Don't break, retry immediately with bot
+                            if active_sender is not helper_bot:
+                                # Primary hit FloodWait
+                                primary_flood_until = resume_time
+                                if helper_bot:
+                                    logging.warning(
+                                        f"Primary FloodWait {fwe.seconds}s — switching to helper bot: {msg_link}"
+                                    )
+                                    active_sender = helper_bot
+                                    # Retry immediately with bot (loop continues)
+                                else:
+                                    # No helper bot configured — defer
+                                    logging.warning(
+                                        f"Primary FloodWait {fwe.seconds}s — {msg_link}\n"
+                                        f"  Skipping to next source. Will resume after wait expires."
+                                    )
+                                    queue.append((resume_time, forward, src, dest))
+                                    flood_wait_hit = True
+                                    break
+
                             else:
-                                # Either no helper bot, or bot also hit FloodWait → defer
-                                who = "Helper bot" if active_sender is helper_bot else "Primary"
-                                logging.warning(
-                                    f"{who} FloodWait {fwe.seconds}s — {msg_link}\n"
-                                    f"  Skipping to next source. Will resume after wait expires."
-                                )
-                                active_sender = None  # reset for next attempt
-                                queue.append((resume_time, forward, src, dest))
-                                flood_wait_hit = True
-                                break  # break inner while
+                                # Bot hit FloodWait — check if primary has recovered
+                                if time.time() >= primary_flood_until:
+                                    logging.warning(
+                                        f"Bot FloodWait {fwe.seconds}s — primary available again, falling back: {msg_link}"
+                                    )
+                                    active_sender = None  # fall back to primary
+                                    # Retry immediately with primary (loop continues)
+                                else:
+                                    # Both rate-limited — defer until earliest recovery
+                                    earliest = min(primary_flood_until, resume_time)
+                                    logging.warning(
+                                        f"Bot FloodWait {fwe.seconds}s — both accounts rate-limited: {msg_link}\n"
+                                        f"  Skipping to next source. Will resume in {earliest - time.time():.0f}s."
+                                    )
+                                    active_sender = None  # reset for next attempt
+                                    queue.append((earliest, forward, src, dest))
+                                    flood_wait_hit = True
+                                    break
 
                         except Exception as err:
                             logging.exception(err)
