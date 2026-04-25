@@ -42,7 +42,12 @@ async def forward_job(resilient: bool = False) -> None:
 
 
 async def _run_forward_job(SESSION, resilient: bool = False) -> None:
-    """Core forwarding logic — runs one full pass through all channels."""
+    """Core forwarding logic — runs one full pass through all channels.
+
+    Uses a deferred queue: if a FloodWait is hit on a source, it is skipped
+    and re-queued with a resume timestamp. Other sources continue processing
+    in the meantime. A source is retried only after its flood wait expires.
+    """
     # connection_retries=-1 means Telethon retries forever (used in resilient mode)
     connection_retries = -1 if resilient else 5
     if resilient:
@@ -58,17 +63,40 @@ async def _run_forward_job(SESSION, resilient: bool = False) -> None:
         client: TelegramClient
         unavailable_channels = []
         finished_channels = []
-        for from_to, forward in zip(config.from_to.items(), config.CONFIG.forwards):
-            src, dest = from_to
-            last_id = 0
-            forward: config.Forward
+
+        # Build the initial queue: list of (resume_at, forward, src, dest)
+        # resume_at=0 means ready immediately
+        queue = []
+        for (src, dest), forward in zip(config.from_to.items(), config.CONFIG.forwards):
+            queue.append((0.0, forward, src, dest))
+
+        while queue:
+            # Sort by resume_at so the earliest-ready source comes first
+            queue.sort(key=lambda x: x[0])
+            resume_at, forward, src, dest = queue.pop(0)
+
+            # If this source isn't ready yet, wait out the remaining time
+            wait_remaining = resume_at - time.time()
+            if wait_remaining > 0:
+                logging.info(
+                    f"All sources are deferred. Waiting {wait_remaining:.0f}s "
+                    f"before resuming next source..."
+                )
+                await asyncio.sleep(wait_remaining)
+
+            # Resolve channel name
             try:
                 src_entity = await client.get_entity(src)
                 real_name = getattr(src_entity, 'title', getattr(src_entity, 'username', str(src)))
             except Exception:
                 real_name = str(src)
             con_name = forward.con_name if forward.con_name else "Unnamed"
-            logging.info(f"Forwarding messages from {src} (Real Name: {real_name}, Config: {con_name}) to {dest}")
+            label = f"{src} (Real: {real_name}, Config: {con_name})"
+
+            logging.info(f"Forwarding messages from {label} to {dest}")
+            last_id = 0
+            flood_wait_hit = False
+
             try:
                 async for message in client.iter_messages(
                     src, reverse=True, offset_id=forward.offset
@@ -81,6 +109,8 @@ async def _run_forward_job(SESSION, resilient: bool = False) -> None:
                         continue
                     if isinstance(message, MessageService):
                         continue
+
+                    r_event_uid = None
                     while True:
                         try:
                             tm = await apply_plugins(message)
@@ -95,7 +125,9 @@ async def _run_forward_job(SESSION, resilient: bool = False) -> None:
                                 r_event_uid = st.EventUid(r_event)
                             for d in dest:
                                 if message.is_reply and r_event_uid in st.stored:
-                                    tm.reply_to = st.stored.get(r_event_uid).get(d)
+                                    r_stored = st.stored.get(r_event_uid)
+                                    if r_stored:
+                                        tm.reply_to = r_stored.get(d)
                                 fwded_msg = await send_message(d, tm)
                                 st.stored[event_uid].update({d: fwded_msg.id})
                             tm.clear()
@@ -104,8 +136,7 @@ async def _run_forward_job(SESSION, resilient: bool = False) -> None:
                             forward.offset = last_id
                             write_config(CONFIG, persist=False)
                             time.sleep(CONFIG.past.delay)
-                            logging.info(f"slept for {CONFIG.past.delay} seconds")
-                            break  # success, move to next message
+                            break  # success
 
                         except ChatForwardsRestrictedError:
                             logging.warning(
@@ -115,27 +146,36 @@ async def _run_forward_job(SESSION, resilient: bool = False) -> None:
                             forward.offset = last_id
                             write_config(CONFIG, persist=False)
                             break  # skip this message
+
                         except FloodWaitError as fwe:
-                            # Build a direct Telegram link to the message
-                            # Private supergroup IDs are like -100XXXXXXXXX; strip the -100 prefix
                             channel_id = str(src).replace("-100", "")
                             msg_link = f"https://t.me/c/{channel_id}/{message.id}"
+                            resume_time = time.time() + fwe.seconds
                             logging.warning(
-                                f"FloodWait: sleeping for {fwe.seconds}s before retrying — {msg_link}"
+                                f"FloodWait {fwe.seconds}s on {label} — {msg_link}\n"
+                                f"  Skipping to next source. Will resume after wait expires."
                             )
-                            await asyncio.sleep(delay=fwe.seconds)
-                            # loop continues — retries the same message
+                            # Re-queue this source to resume after the flood wait
+                            queue.append((resume_time, forward, src, dest))
+                            flood_wait_hit = True
+                            break  # break inner while
+
                         except Exception as err:
                             logging.exception(err)
                             break  # skip on unknown error
-                finished_channels.append(f"{src} ({real_name} / {con_name})")
-                logging.info(f"Finished forwarding messages from {src} (Real Name: {real_name}, Config: {con_name})")
+
+                    if flood_wait_hit:
+                        break  # break out of iter_messages loop, move to next source
+
+                if not flood_wait_hit:
+                    finished_channels.append(label)
+                    logging.info(f"Finished forwarding messages from {label}")
+
             except ValueError as err:
                 name = forward.con_name if forward.con_name else str(src)
                 logging.error(f"Could not access source {src} ({name}): {err}")
                 unavailable_channels.append(f"{src} ({name})")
-                continue
-                
+
         if finished_channels:
             logging.info("=== Past mode complete. Channels processed: ===")
             for ch in finished_channels:
