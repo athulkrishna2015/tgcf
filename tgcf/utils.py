@@ -29,10 +29,20 @@ def platform_info():
     \n{platform.architecture()} {platform.processor()}"""
 
 
-async def send_message(recipient: EntityLike, tm: "TgcfMessage") -> Message:
-    """Forward or send a copy, depending on config."""
-    client: TelegramClient = tm.message.client
-    if CONFIG.show_forwarded_from:
+async def send_message(
+    recipient: EntityLike,
+    tm: "TgcfMessage",
+    sender_client: TelegramClient = None,
+) -> Message:
+    """Forward or send a copy, depending on config.
+
+    Args:
+        sender_client: Optional override client (e.g. helper bot). If not provided,
+                       uses the primary client from the message.
+    """
+    client: TelegramClient = sender_client or tm.message.client
+    if CONFIG.show_forwarded_from and sender_client is None:
+        # forward_messages requires the original message's client; bots can't use this
         return await client.forward_messages(recipient, tm.message)
     if tm.new_file:
         message = await client.send_file(

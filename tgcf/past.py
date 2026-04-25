@@ -59,6 +59,18 @@ async def _run_forward_job(SESSION, resilient: bool = False) -> None:
         connection_retries=connection_retries,
         retry_delay=30,
     ) as client:
+        # Initialize helper bot if token is configured
+        helper_bot = None
+        if CONFIG.login.HELPER_BOT_TOKEN:
+            helper_bot = TelegramClient(
+                "helper_bot", CONFIG.login.API_ID, CONFIG.login.API_HASH,
+                connection_retries=connection_retries,
+                retry_delay=30,
+            )
+            await helper_bot.start(bot_token=CONFIG.login.HELPER_BOT_TOKEN)
+            logging.info("Helper bot started — will take over sending on primary FloodWait.")
+        else:
+            logging.info("No HELPER_BOT_TOKEN configured — running without helper bot.")
         config.from_to = await config.load_from_to(client, config.CONFIG.forwards)
         client: TelegramClient
         unavailable_channels = []
@@ -111,6 +123,7 @@ async def _run_forward_job(SESSION, resilient: bool = False) -> None:
                         continue
 
                     r_event_uid = None
+                    active_sender = None  # None = use primary client; set to helper_bot on FloodWait
                     while True:
                         try:
                             tm = await apply_plugins(message)
@@ -128,7 +141,7 @@ async def _run_forward_job(SESSION, resilient: bool = False) -> None:
                                     r_stored = st.stored.get(r_event_uid)
                                     if r_stored:
                                         tm.reply_to = r_stored.get(d)
-                                fwded_msg = await send_message(d, tm)
+                                fwded_msg = await send_message(d, tm, sender_client=active_sender)
                                 st.stored[event_uid].update({d: fwded_msg.id})
                             tm.clear()
                             last_id = message.id
@@ -151,14 +164,25 @@ async def _run_forward_job(SESSION, resilient: bool = False) -> None:
                             channel_id = str(src).replace("-100", "")
                             msg_link = f"https://t.me/c/{channel_id}/{message.id}"
                             resume_time = time.time() + fwe.seconds
-                            logging.warning(
-                                f"FloodWait {fwe.seconds}s on {label} — {msg_link}\n"
-                                f"  Skipping to next source. Will resume after wait expires."
-                            )
-                            # Re-queue this source to resume after the flood wait
-                            queue.append((resume_time, forward, src, dest))
-                            flood_wait_hit = True
-                            break  # break inner while
+
+                            if helper_bot and active_sender is not helper_bot:
+                                # Primary hit FloodWait — switch to helper bot
+                                logging.warning(
+                                    f"Primary FloodWait {fwe.seconds}s — switching to helper bot for {msg_link}"
+                                )
+                                active_sender = helper_bot
+                                # Don't break, retry immediately with bot
+                            else:
+                                # Either no helper bot, or bot also hit FloodWait → defer
+                                who = "Helper bot" if active_sender is helper_bot else "Primary"
+                                logging.warning(
+                                    f"{who} FloodWait {fwe.seconds}s — {msg_link}\n"
+                                    f"  Skipping to next source. Will resume after wait expires."
+                                )
+                                active_sender = None  # reset for next attempt
+                                queue.append((resume_time, forward, src, dest))
+                                flood_wait_hit = True
+                                break  # break inner while
 
                         except Exception as err:
                             logging.exception(err)
