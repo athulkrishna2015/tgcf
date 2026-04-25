@@ -9,7 +9,7 @@ import logging
 import time
 
 from telethon import TelegramClient
-from telethon.errors.rpcerrorlist import ChatForwardsRestrictedError, FloodWaitError, MediaEmptyError
+from telethon.errors.rpcerrorlist import ChatForwardsRestrictedError, FloodWaitError
 from telethon.tl.custom.message import Message
 from telethon.tl.patched import MessageService
 
@@ -59,18 +59,6 @@ async def _run_forward_job(SESSION, resilient: bool = False) -> None:
         connection_retries=connection_retries,
         retry_delay=30,
     ) as client:
-        # Initialize helper bot if BOT_TOKEN is configured (and we're running as user account)
-        helper_bot = None
-        if CONFIG.login.BOT_TOKEN:
-            helper_bot = TelegramClient(
-                "helper_bot", CONFIG.login.API_ID, CONFIG.login.API_HASH,
-                connection_retries=connection_retries,
-                retry_delay=30,
-            )
-            await helper_bot.start(bot_token=CONFIG.login.BOT_TOKEN)
-            logging.info("Helper bot started — will take over sending on primary FloodWait.")
-        else:
-            logging.info("No BOT_TOKEN configured — running without helper bot.")
         config.from_to = await config.load_from_to(client, config.CONFIG.forwards)
         client: TelegramClient
         unavailable_channels = []
@@ -123,12 +111,6 @@ async def _run_forward_job(SESSION, resilient: bool = False) -> None:
                         continue
 
                     r_event_uid = None
-                    # Prefer bot for text-only messages; media must use primary (bot can't
-                    # re-reference media file handles from the user's session)
-                    has_media = bool(message.media)
-                    active_sender = helper_bot if (helper_bot and not has_media) else None
-                    bot_flood_until = 0.0      # timestamp when bot's ban expires
-                    primary_flood_until = 0.0  # timestamp when primary's ban expires
                     while True:
                         try:
                             tm = await apply_plugins(message)
@@ -146,7 +128,7 @@ async def _run_forward_job(SESSION, resilient: bool = False) -> None:
                                     r_stored = st.stored.get(r_event_uid)
                                     if r_stored:
                                         tm.reply_to = r_stored.get(d)
-                                fwded_msg = await send_message(d, tm, sender_client=active_sender)
+                                fwded_msg = await send_message(d, tm)
                                 st.stored[event_uid].update({d: fwded_msg.id})
                             tm.clear()
                             last_id = message.id
@@ -169,66 +151,14 @@ async def _run_forward_job(SESSION, resilient: bool = False) -> None:
                             channel_id = str(src).replace("-100", "")
                             msg_link = f"https://t.me/c/{channel_id}/{message.id}"
                             resume_time = time.time() + fwe.seconds
-
-                            if active_sender is helper_bot:
-                                # Bot hit FloodWait — fall back to primary if available
-                                bot_flood_until = resume_time
-                                if time.time() >= primary_flood_until:
-                                    logging.warning(
-                                        f"Bot FloodWait {fwe.seconds}s — falling back to primary: {msg_link}"
-                                    )
-                                    active_sender = None  # use primary
-                                    # Retry immediately with primary (loop continues)
-                                else:
-                                    # Primary also rate-limited — defer
-                                    earliest = min(primary_flood_until, resume_time)
-                                    logging.warning(
-                                        f"Bot FloodWait {fwe.seconds}s — both accounts rate-limited: {msg_link}\n"
-                                        f"  Skipping to next source. Will resume in {earliest - time.time():.0f}s."
-                                    )
-                                    active_sender = helper_bot  # reset to preferred for next attempt
-                                    queue.append((earliest, forward, src, dest))
-                                    flood_wait_hit = True
-                                    break
-
-                            else:
-                                # Primary hit FloodWait — try switching to bot if available
-                                primary_flood_until = resume_time
-                                if helper_bot and time.time() >= bot_flood_until:
-                                    logging.warning(
-                                        f"Primary FloodWait {fwe.seconds}s — switching to helper bot: {msg_link}"
-                                    )
-                                    active_sender = helper_bot
-                                    # Retry immediately with bot (loop continues)
-                                else:
-                                    # No bot or bot also rate-limited — defer
-                                    earliest = min(primary_flood_until, bot_flood_until) if helper_bot else primary_flood_until
-                                    logging.warning(
-                                        f"Primary FloodWait {fwe.seconds}s — both accounts rate-limited: {msg_link}\n"
-                                        f"  Skipping to next source. Will resume in {earliest - time.time():.0f}s."
-                                    )
-                                    active_sender = helper_bot  # reset to preferred for next attempt
-                                    queue.append((earliest, forward, src, dest))
-                                    flood_wait_hit = True
-                                    break
-
-                        except MediaEmptyError:
-                            if active_sender is helper_bot:
-                                # Bot can't reference media from user's session — fall back to primary
-                                logging.warning(
-                                    f"Bot cannot send media for message {message.id} "
-                                    f"(media reference is tied to user session) — falling back to primary."
-                                )
-                                active_sender = None  # retry with primary
-                            else:
-                                # Primary also can't send this media — skip
-                                logging.warning(
-                                    f"Skipping message {message.id}: media is unavailable or expired."
-                                )
-                                last_id = message.id
-                                forward.offset = last_id
-                                write_config(CONFIG, persist=False)
-                                break
+                            logging.warning(
+                                f"FloodWait {fwe.seconds}s on {label} — {msg_link}\n"
+                                f"  Skipping to next source. Will resume after wait expires."
+                            )
+                            # Re-queue this source to resume after the flood wait
+                            queue.append((resume_time, forward, src, dest))
+                            flood_wait_hit = True
+                            break  # break inner while
 
                         except Exception as err:
                             logging.exception(err)
