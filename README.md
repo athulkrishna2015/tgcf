@@ -64,6 +64,9 @@ GitHub Actions does not save changes to the `tgcf.config.json` file across runs.
 
 ## Changelog
 
+### 2026-04-25
+- fix(past): fix `--resilient` mode — now uses `connection_retries=-1` so Telethon retries forever internally; the previous approach using a Python try/except loop failed because Telethon raises `ConnectionError` in a shielded background future that couldn't be caught
+
 ### 2026-04-24
 - feat(past): add `--resilient` / `-r` flag for automatic reconnect and resume on network failure
 - feat(past): retry same message after FloodWait instead of skipping it
