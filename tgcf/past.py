@@ -123,8 +123,10 @@ async def _run_forward_job(SESSION, resilient: bool = False) -> None:
                         continue
 
                     r_event_uid = None
-                    # Prefer bot if available; fall back to primary on bot FloodWait
-                    active_sender = helper_bot  # None = primary; helper_bot = bot
+                    # Prefer bot for text-only messages; media must use primary (bot can't
+                    # re-reference media file handles from the user's session)
+                    has_media = bool(message.media)
+                    active_sender = helper_bot if (helper_bot and not has_media) else None
                     bot_flood_until = 0.0      # timestamp when bot's ban expires
                     primary_flood_until = 0.0  # timestamp when primary's ban expires
                     while True:
