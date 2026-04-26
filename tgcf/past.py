@@ -83,28 +83,54 @@ async def _run_forward_job(SESSION, resilient: bool = False) -> None:
         client = primary_client
         unavailable_channels = []
         finished_channels = []
+        # Upfront access check and smart sorting
+        logging.info("Performing upfront access checks for smart channel sorting...")
+        channel_access_data = []
         for from_to, forward in zip(config.from_to.items(), config.CONFIG.forwards):
             src, dest = from_to
-            last_id = 0
-            forward: config.Forward
             try:
-                src_entity = await client.get_entity(src)
+                src_entity = await primary_client.get_entity(src)
                 real_name = getattr(src_entity, 'title', getattr(src_entity, 'username', str(src)))
             except Exception:
                 real_name = str(src)
             con_name = forward.con_name if forward.con_name else "Unnamed"
-            logging.info(f"Forwarding messages from {src} (Real Name: {real_name}, Config: {con_name}) to {dest}")
             
-            # Check which alternate clients have access to this source
             allowed_clients = [0]  # Primary client is assumed to have access
             for i in range(1, len(clients)):
                 try:
                     await clients[i].get_entity(src)
                     allowed_clients.append(i)
-                    logging.info(f"Alternate account {i} verified access to {src}.")
-                except Exception as e:
-                    logging.warning(f"Alternate account {i} cannot access {src} ({e}). It will be skipped for this channel.")
+                except Exception:
+                    pass
+            
+            channel_access_data.append({
+                'src': src,
+                'dest': dest,
+                'forward': forward,
+                'real_name': real_name,
+                'con_name': con_name,
+                'allowed_clients': allowed_clients
+            })
+            
+        # Sort channels by number of allowed clients (ascending)
+        # So channels with fewest accounts (e.g., only primary) are processed FIRST
+        channel_access_data.sort(key=lambda x: len(x['allowed_clients']))
+        
+        logging.info("Smart sorting complete. Processing order:")
+        for i, data in enumerate(channel_access_data):
+            logging.info(f"{i+1}. {data['src']} - {len(data['allowed_clients'])} accounts have access")
 
+        for channel_data in channel_access_data:
+            src = channel_data['src']
+            dest = channel_data['dest']
+            forward = channel_data['forward']
+            real_name = channel_data['real_name']
+            con_name = channel_data['con_name']
+            allowed_clients = channel_data['allowed_clients']
+            last_id = 0
+            
+            logging.info(f"Forwarding messages from {src} (Real Name: {real_name}, Config: {con_name}) to {dest}")
+            
             try:
                 async for message in client.iter_messages(
                     src, reverse=True, offset_id=forward.offset
