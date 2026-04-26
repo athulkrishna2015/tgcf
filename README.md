@@ -9,7 +9,6 @@ A customized version of `tgcf` for automated telegram message forwarding.
 - Gracefully handles unavailable or missing source channels by skipping them and reporting errors at the end.
 - Robust ID handling for different Telegram peer formats.
 - **Resilient mode**: automatically reconnects and resumes after network outages (`tgcf past --resilient`).
-- **Deferred queue**: on FloodWait, skips to the next source channel and comes back — no blocking.
 - Detailed logging: shows real Telegram channel names, message links for FloodWait retries, and a full summary on completion.
 
 ## Setup
@@ -64,9 +63,6 @@ To use it, add the following **Secrets** to your GitHub repository:
 GitHub Actions does not save changes to the `tgcf.config.json` file across runs. If you need to keep track of the message `offset`, consider using the **MongoDB** integration by setting the `MONGO_CON_STR` environment variable.
 
 ## Changelog
-
-### 2026-04-26
-- feat(past): deferred queue — on FloodWait, skip to next source and resume after wait expires
 
 ### 2026-04-25
 - fix(past): fix `--resilient` mode — now uses `connection_retries=-1` so Telethon retries forever internally; the previous approach using a Python try/except loop failed because Telethon raises `ConnectionError` in a shielded background future that couldn't be caught
