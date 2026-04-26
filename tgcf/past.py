@@ -186,8 +186,9 @@ async def _run_forward_job(SESSION, resilient: bool = False) -> None:
                                         # All ALLOWED clients are flooded. Sleep until the earliest one expires.
                                         earliest = min([flood_until[i] for i in allowed_clients])
                                         wait_time = earliest - now
-                                        progress.update(task_id, description=f"[bold yellow]FloodWait: all accounts banned. Waiting {wait_time:.0f}s[/bold yellow]")
-                                        time.sleep(wait_time)
+                                        for remaining in range(int(wait_time), 0, -1):
+                                            progress.update(task_id, description=f"[bold yellow]FloodWait: all accounts banned. Resuming in {remaining}s[/bold yellow]")
+                                            time.sleep(1)
                                         continue
                                         
                                     active_client_idx = available_idx
