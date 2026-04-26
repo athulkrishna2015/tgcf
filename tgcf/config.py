@@ -71,6 +71,36 @@ class LoginConfig(BaseModel):
     ALT_SESSION_STRINGS: List[str] = []
     BOT_TOKEN: str = ""
 
+    @validator("API_ID", pre=True, always=True)
+    def check_api_id(cls, v):
+        return v or int(os.getenv("API_ID", 0))
+
+    @validator("API_HASH", pre=True, always=True)
+    def check_api_hash(cls, v):
+        return v or os.getenv("API_HASH", "")
+
+    @validator("SESSION_STRING", pre=True, always=True)
+    def check_session(cls, v):
+        return v or os.getenv("SESSION_STRING", "")
+
+    @validator("ALT_SESSION_STRINGS", pre=True, always=True)
+    def check_alt_sessions(cls, v):
+        if not v:
+            alt_env = os.getenv("ALT_SESSION_STRINGS", "")
+            if alt_env:
+                return [s.strip() for s in alt_env.split(",") if s.strip()]
+        return v or []
+
+    @validator("BOT_TOKEN", pre=True, always=True)
+    def check_bot_token(cls, v):
+        return v or os.getenv("BOT_TOKEN", "")
+
+    @validator("user_type", always=True)
+    def check_user_type(cls, v, values):
+        if values.get("SESSION_STRING"):
+            return 1
+        return 0
+
 
 class BotMessages(BaseModel):
     start: str = "Hi! I am alive"
