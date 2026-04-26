@@ -242,3 +242,6 @@ async def _run_forward_job(SESSION, resilient: bool = False) -> None:
             logging.error("=== Unavailable channels (could not access): ===")
             for ch in unavailable_channels:
                 logging.error(f"  ✗ {ch}")
+    finally:
+        for client in clients:
+            await client.disconnect()
