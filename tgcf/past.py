@@ -101,9 +101,11 @@ async def _run_forward_job(SESSION, resilient: bool = False) -> None:
         channel_access_data = []
         for from_to, forward in zip(config.from_to.items(), config.CONFIG.forwards):
             src, dest = from_to
+            has_ttl = False
             try:
                 src_entity = await primary_client.get_entity(src)
                 real_name = getattr(src_entity, 'title', getattr(src_entity, 'username', str(src)))
+                has_ttl = bool(getattr(src_entity, 'ttl_period', 0))
             except Exception:
                 real_name = str(src)
             con_name = forward.con_name if forward.con_name else "Unnamed"
@@ -122,16 +124,18 @@ async def _run_forward_job(SESSION, resilient: bool = False) -> None:
                 'forward': forward,
                 'real_name': real_name,
                 'con_name': con_name,
-                'allowed_clients': allowed_clients
+                'allowed_clients': allowed_clients,
+                'has_ttl': has_ttl
             })
             
-        # Sort channels by number of allowed clients (ascending)
-        # So channels with fewest accounts (e.g., only primary) are processed FIRST
-        channel_access_data.sort(key=lambda x: len(x['allowed_clients']))
+        # Sort channels by presence of delete timer, then number of allowed clients (ascending)
+        # Channels with delete timers (TTL) are processed FIRST, then channels with fewest accounts
+        channel_access_data.sort(key=lambda x: (not x['has_ttl'], len(x['allowed_clients'])))
         
         logging.info("Smart sorting complete. Processing order:")
         for i, data in enumerate(channel_access_data):
-            logging.info(f"{i+1}. {data['src']} - {len(data['allowed_clients'])} accounts have access")
+            ttl_str = "[Timer] " if data['has_ttl'] else ""
+            logging.info(f"{i+1}. {ttl_str}{data['src']} - {len(data['allowed_clients'])} accounts have access")
 
         try:
             with Progress(
