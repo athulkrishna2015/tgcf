@@ -85,11 +85,22 @@ class LoginConfig(BaseModel):
 
     @validator("ALT_SESSION_STRINGS", pre=True, always=True)
     def check_alt_sessions(cls, v):
-        if not v:
-            alt_env = os.getenv("ALT_SESSION_STRINGS", "")
-            if alt_env:
-                return [s.strip() for s in alt_env.split(",") if s.strip()]
-        return v or []
+        sessions = []
+        if v:
+            sessions.extend(v)
+            
+        # Support multiple indexed environment variables (e.g., SESSION_STRING_2, SESSION_STRING_3)
+        for i in range(2, 21):
+            session = os.getenv(f"SESSION_STRING_{i}")
+            if session and session.strip():
+                sessions.append(session.strip())
+                
+        # Support comma-separated list for backward compatibility
+        alt_env = os.getenv("ALT_SESSION_STRINGS", "")
+        if alt_env:
+            sessions.extend([s.strip() for s in alt_env.split(",") if s.strip()])
+            
+        return sessions
 
     @validator("BOT_TOKEN", pre=True, always=True)
     def check_bot_token(cls, v):
