@@ -137,7 +137,16 @@ class Config(BaseModel):
 
 def write_config_to_file(config: Config):
     with open(CONFIG_FILE_NAME, "w", encoding="utf8") as file:
-        file.write(config.json())
+        exclude_dict = {
+            "login": {
+                "API_ID",
+                "API_HASH",
+                "SESSION_STRING",
+                "ALT_SESSION_STRINGS",
+                "BOT_TOKEN"
+            }
+        }
+        file.write(config.json(exclude=exclude_dict))
 
 
 def detect_config_type() -> int:
