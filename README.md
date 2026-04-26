@@ -27,17 +27,12 @@ A customized version of `tgcf` for automated telegram message forwarding.
    pip install -e .
    ```
 4. **Configure:**
-   - Copy `.env.example` to `.env` and add your credentials.
-   - Create a `tgcf.config.json` with your forwarding rules.
-   - **(Optional) Alternate Accounts**: To bypass `FloodWait` limits, you can configure alternate user sessions in `tgcf.config.json` under `login`. These accounts will automatically take over when the primary hits a rate limit. **Note: Alternate accounts must have joined the source channels.**
-     ```json
-     "login": {
-       "SESSION_STRING": "your_main_session",
-       "ALT_SESSION_STRINGS": [
-         "alternate_session_1",
-         "alternate_session_2"
-       ]
-     }
+   - Copy `.env.example` to `.env` and add your credentials (`API_ID`, `API_HASH`, `SESSION_STRING`).
+   - Create a `tgcf.config.json` with your forwarding rules. Keep the `"login": {}` block empty to automatically load secrets from `.env`.
+   - **(Optional) Alternate Accounts**: To bypass `FloodWait` limits, you can configure alternate user sessions in your `.env` file using a comma-separated list. These accounts will automatically take over when the primary hits a rate limit. **Note: Alternate accounts must have joined the source channels.**
+     ```bash
+     # Inside your .env file
+     ALT_SESSION_STRINGS=alternate_session_1,alternate_session_2
      ```
 
 ## Usage
@@ -77,6 +72,7 @@ GitHub Actions does not save changes to the `tgcf.config.json` file across runs.
 ## Changelog
 
 ### 2026-04-26
+- refactor(config): read login secrets from `.env` automatically if empty in `tgcf.config.json` (better security)
 - feat(past): implement smart channel sorting based on account access to maximize throughput
 - feat(past): verify alternate account access to source channel upfront
 - feat(past): add multiple session support (`ALT_SESSION_STRINGS`) to rotate accounts automatically and bypass `FloodWait` restrictions
