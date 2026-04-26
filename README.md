@@ -9,7 +9,8 @@ A customized version of `tgcf` for automated telegram message forwarding.
 - Gracefully handles unavailable or missing source channels by skipping them and reporting errors at the end.
 - Robust ID handling for different Telegram peer formats.
 - **Resilient mode**: automatically reconnects and resumes after network outages (`tgcf past --resilient`).
-- **Multiple Sessions**: configure alternate accounts to automatically take over when the main account hits a `FloodWait` limit.
+- **Multiple Sessions**: configure alternate accounts to bypass `FloodWait` limits.
+- **Smart Channel Sorting**: automatically prioritizes processing highly-restricted channels first to maximize account availability before rate limits hit.
 - Detailed logging: shows real Telegram channel names, message links for FloodWait retries, and a full summary on completion.
 
 ## Setup
@@ -76,6 +77,8 @@ GitHub Actions does not save changes to the `tgcf.config.json` file across runs.
 ## Changelog
 
 ### 2026-04-26
+- feat(past): implement smart channel sorting based on account access to maximize throughput
+- feat(past): verify alternate account access to source channel upfront
 - feat(past): add multiple session support (`ALT_SESSION_STRINGS`) to rotate accounts automatically and bypass `FloodWait` restrictions
 - fix(past): fetch messages using the active alternate account to ensure media file references are valid for that session
 
