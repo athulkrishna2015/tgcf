@@ -64,12 +64,12 @@ class LoginConfig(BaseModel):
 
     API_ID: int = 0
     API_HASH: str = ""
-    user_type: int = 0  # 0:bot, 1:user
     phone_no: int = 91
     USERNAME: str = ""
     SESSION_STRING: str = ""
     ALT_SESSION_STRINGS: List[str] = []
     BOT_TOKEN: str = ""
+    user_type: int = 0  # 0:bot, 1:user
 
     @validator("API_ID", pre=True, always=True)
     def check_api_id(cls, v):
