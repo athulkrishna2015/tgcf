@@ -13,6 +13,7 @@ from telethon.errors.rpcerrorlist import ChatForwardsRestrictedError, FloodWaitE
 from telethon.tl.custom.message import Message
 from telethon.tl.patched import MessageService
 
+from rich.progress import Progress, TextColumn, SpinnerColumn, TimeElapsedColumn
 from tgcf import config
 from tgcf import storage as st
 from tgcf.config import CONFIG, get_SESSION, write_config
@@ -130,122 +131,132 @@ async def _run_forward_job(SESSION, resilient: bool = False) -> None:
         
         logging.info("Smart sorting complete. Processing order:")
         for i, data in enumerate(channel_access_data):
-            logging.info(f"{i+1}. {data['src']} - {len(data['allowed_clients'])} accounts have access")
+            logging.info(f"{i+1}. {data['src']} - {len(data['allowed_clients'])} accounts have access")    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[bold blue]{task.fields[channel]}[/bold blue]"),
+            TextColumn("[progress.description]{task.description}"),
+            TimeElapsedColumn(),
+        ) as progress:
+            for channel_data in channel_access_data:
+                src = channel_data['src']
+                dest = channel_data['dest']
+                forward = channel_data['forward']
+                real_name = channel_data['real_name']
+                con_name = channel_data['con_name']
+                allowed_clients = channel_data['allowed_clients']
+                last_id = 0
+                
+                stripped_id = str(src).replace("-100", "")
+                task_id = progress.add_task(
+                    "Connecting...",
+                    channel=f"{real_name[:20]:<20}",
+                )
+                
+                try:
+                    async for message in client.iter_messages(
+                        src, reverse=True, offset_id=forward.offset
+                    ):
+                        message: Message
+                        event = st.DummyEvent(message.chat_id, message.id)
+                        event_uid = st.EventUid(event)
 
-    try:
-        for channel_data in channel_access_data:
-            src = channel_data['src']
-            dest = channel_data['dest']
-            forward = channel_data['forward']
-            real_name = channel_data['real_name']
-            con_name = channel_data['con_name']
-            allowed_clients = channel_data['allowed_clients']
-            last_id = 0
-            
-            logging.info(f"Forwarding messages from {src} (Real Name: {real_name}, Config: {con_name}) to {dest}")
-            
-            try:
-                async for message in client.iter_messages(
-                    src, reverse=True, offset_id=forward.offset
-                ):
-                    message: Message
-                    event = st.DummyEvent(message.chat_id, message.id)
-                    event_uid = st.EventUid(event)
-
-                    if forward.end and last_id > forward.end:
-                        continue
-                    if isinstance(message, MessageService):
-                        continue
-                    r_event_uid = None
-                    while True:
-                        try:
-                            # 1. Determine active client from ALLOWED clients
-                            now = time.time()
-                            available_idx = -1
-                            for i in allowed_clients:
-                                if now >= flood_until[i]:
-                                    available_idx = i
-                                    break
-                                    
-                            if available_idx == -1:
-                                # All ALLOWED clients are flooded. Sleep until the earliest one expires.
-                                earliest = min([flood_until[i] for i in allowed_clients])
-                                wait_time = earliest - now
-                                logging.warning(f"All allowed accounts are in FloodWait. Sleeping for {wait_time:.0f}s")
-                                time.sleep(wait_time)
-                                continue
-                                
-                            active_client_idx = available_idx
-                            active_client = clients[active_client_idx]
-                            
-                            # 2. Get message object for active client
-                            if active_client_idx == 0:
-                                active_message = message
-                            else:
-                                active_message_list = await active_client.get_messages(src, ids=[message.id])
-                                if not active_message_list or not active_message_list[0]:
-                                    logging.warning(f"Account {active_client_idx} failed to fetch message {message.id}. Skipping for 5 mins.")
-                                    flood_until[active_client_idx] = now + 300
+                        if forward.end and last_id > forward.end:
+                            continue
+                        if isinstance(message, MessageService):
+                            continue
+                        r_event_uid = None
+                        while True:
+                            try:
+                                # 1. Determine active client from ALLOWED clients
+                                now = time.time()
+                                available_idx = -1
+                                for i in allowed_clients:
+                                    if now >= flood_until[i]:
+                                        available_idx = i
+                                        break
+                                        
+                                if available_idx == -1:
+                                    # All ALLOWED clients are flooded. Sleep until the earliest one expires.
+                                    earliest = min([flood_until[i] for i in allowed_clients])
+                                    wait_time = earliest - now
+                                    progress.update(task_id, description=f"[bold yellow]FloodWait: all accounts banned. Waiting {wait_time:.0f}s[/bold yellow]")
+                                    time.sleep(wait_time)
                                     continue
-                                active_message = active_message_list[0]
+                                    
+                                active_client_idx = available_idx
+                                active_client = clients[active_client_idx]
                                 
-                            # 3. Apply plugins
-                            tm = await apply_plugins(active_message)
-                            if not tm:
-                                break
-                            st.stored[event_uid] = {}
+                                # 2. Get message object for active client
+                                if active_client_idx == 0:
+                                    active_message = message
+                                else:
+                                    active_message_list = await active_client.get_messages(src, ids=[message.id])
+                                    if not active_message_list or not active_message_list[0]:
+                                        progress.update(task_id, description=f"[bold red]Account {active_client_idx} failed to fetch {message.id}[/bold red]")
+                                        flood_until[active_client_idx] = now + 300
+                                        continue
+                                    active_message = active_message_list[0]
+                                    
+                                # 3. Apply plugins
+                                tm = await apply_plugins(active_message)
+                                if not tm:
+                                    break
+                                st.stored[event_uid] = {}
 
-                            if message.is_reply:
-                                r_event = st.DummyEvent(
-                                    message.chat_id, message.reply_to_msg_id
+                                if message.is_reply:
+                                    r_event = st.DummyEvent(
+                                        message.chat_id, message.reply_to_msg_id
+                                    )
+                                    r_event_uid = st.EventUid(r_event)
+                                for d in dest:
+                                    if message.is_reply and r_event_uid in st.stored:
+                                        tm.reply_to = st.stored.get(r_event_uid).get(d)
+                                    fwded_msg = await send_message(d, tm)
+                                    st.stored[event_uid].update({d: fwded_msg.id})
+                                tm.clear()
+                                last_id = message.id
+                                
+                                msg_link = f"https://t.me/c/{stripped_id}/{last_id}"
+                                account_name = client_names[active_client_idx]
+                                progress.update(
+                                    task_id, 
+                                    description=f"Msg: [cyan]{last_id}[/cyan] [dim]({account_name})[/dim] [link={msg_link}]🔗[/link]"
                                 )
-                                r_event_uid = st.EventUid(r_event)
-                            for d in dest:
-                                if message.is_reply and r_event_uid in st.stored:
-                                    tm.reply_to = st.stored.get(r_event_uid).get(d)
-                                fwded_msg = await send_message(d, tm)
-                                st.stored[event_uid].update({d: fwded_msg.id})
-                            tm.clear()
-                            last_id = message.id
-                            
-                            if active_client_idx > 0:
-                                logging.info(f"forwarding message with id = {last_id} (using {client_names[active_client_idx]})")
-                            else:
-                                logging.info(f"forwarding message with id = {last_id}")
                                 
-                            forward.offset = last_id
-                            write_config(CONFIG, persist=False)
-                            time.sleep(CONFIG.past.delay)
-                            break  # success
+                                forward.offset = last_id
+                                write_config(CONFIG, persist=False)
+                                time.sleep(CONFIG.past.delay)
+                                break  # success
 
-                        except ChatForwardsRestrictedError:
-                            logging.warning(
-                                f"Skipping message {message.id} in {src}: chat is protected."
-                            )
-                            last_id = message.id
-                            forward.offset = last_id
-                            write_config(CONFIG, persist=False)
-                            break  # skip this message
+                            except ChatForwardsRestrictedError:
+                                logging.warning(
+                                    f"Skipping message {message.id} in {src}: chat is protected."
+                                )
+                                last_id = message.id
+                                forward.offset = last_id
+                                write_config(CONFIG, persist=False)
+                                break  # skip this message
 
-                        except FloodWaitError as fwe:
-                            channel_id = str(src).replace("-100", "")
-                            msg_link = f"https://t.me/c/{channel_id}/{message.id}"
-                            logging.warning(
-                                f"Account {active_client_idx} hit FloodWait: sleeping for {fwe.seconds}s before retrying — {msg_link}"
-                            )
-                            flood_until[active_client_idx] = time.time() + fwe.seconds
-                            # Loop continues to retry with the next available account
+                            except FloodWaitError as fwe:
+                                msg_link = f"https://t.me/c/{stripped_id}/{message.id}"
+                                logging.warning(
+                                    f"Account {active_client_idx} hit FloodWait: sleeping for {fwe.seconds}s before retrying — {msg_link}"
+                                )
+                                flood_until[active_client_idx] = time.time() + fwe.seconds
+                                # Loop continues to retry with the next available account
 
-                        except Exception as err:
-                            logging.exception(err)
-                            break  # skip on unknown error
-                finished_channels.append(f"{src} ({real_name} / {con_name})")
-                logging.info(f"Finished forwarding messages from {src} (Real Name: {real_name}, Config: {con_name})")
-            except ValueError as err:
-                name = forward.con_name if forward.con_name else str(src)
-                logging.error(f"Could not access source {src} ({name}): {err}")
-                unavailable_channels.append(f"{src} ({name})")
-                continue
+                            except Exception as err:
+                                logging.exception(err)
+                                break  # skip on unknown error
+                    finished_channels.append(f"{src} ({real_name} / {con_name})")
+                    progress.update(task_id, description="[bold green]Finished[/bold green]", visible=False)
+                except ValueError as err:
+                    name = forward.con_name if forward.con_name else str(src)
+                    logging.error(f"Could not access source {src} ({name}): {err}")
+                    unavailable_channels.append(f"{src} ({name})")
+                    progress.update(task_id, description="[bold red]Failed[/bold red]", visible=False)
+                    continue
                 
         if finished_channels:
             logging.info("=== Past mode complete. Channels processed: ===")
