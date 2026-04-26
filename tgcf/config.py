@@ -68,6 +68,7 @@ class LoginConfig(BaseModel):
     phone_no: int = 91
     USERNAME: str = ""
     SESSION_STRING: str = ""
+    ALT_SESSION_STRINGS: List[str] = []
     BOT_TOKEN: str = ""
 
 

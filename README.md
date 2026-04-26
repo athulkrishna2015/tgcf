@@ -9,6 +9,7 @@ A customized version of `tgcf` for automated telegram message forwarding.
 - Gracefully handles unavailable or missing source channels by skipping them and reporting errors at the end.
 - Robust ID handling for different Telegram peer formats.
 - **Resilient mode**: automatically reconnects and resumes after network outages (`tgcf past --resilient`).
+- **Multiple Sessions**: configure alternate accounts to automatically take over when the main account hits a `FloodWait` limit.
 - Detailed logging: shows real Telegram channel names, message links for FloodWait retries, and a full summary on completion.
 
 ## Setup
@@ -27,6 +28,16 @@ A customized version of `tgcf` for automated telegram message forwarding.
 4. **Configure:**
    - Copy `.env.example` to `.env` and add your credentials.
    - Create a `tgcf.config.json` with your forwarding rules.
+   - **(Optional) Alternate Accounts**: To bypass `FloodWait` limits, you can configure alternate user sessions in `tgcf.config.json` under `login`. These accounts will automatically take over when the primary hits a rate limit. **Note: Alternate accounts must have joined the source channels.**
+     ```json
+     "login": {
+       "SESSION_STRING": "your_main_session",
+       "ALT_SESSION_STRINGS": [
+         "alternate_session_1",
+         "alternate_session_2"
+       ]
+     }
+     ```
 
 ## Usage
 Run in past mode:
@@ -63,6 +74,10 @@ To use it, add the following **Secrets** to your GitHub repository:
 GitHub Actions does not save changes to the `tgcf.config.json` file across runs. If you need to keep track of the message `offset`, consider using the **MongoDB** integration by setting the `MONGO_CON_STR` environment variable.
 
 ## Changelog
+
+### 2026-04-26
+- feat(past): add multiple session support (`ALT_SESSION_STRINGS`) to rotate accounts automatically and bypass `FloodWait` restrictions
+- fix(past): fetch messages using the active alternate account to ensure media file references are valid for that session
 
 ### 2026-04-25
 - fix(past): fix `--resilient` mode — now uses `connection_retries=-1` so Telethon retries forever internally; the previous approach using a Python try/except loop failed because Telethon raises `ConnectionError` in a shielded background future that couldn't be caught

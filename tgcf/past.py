@@ -43,19 +43,44 @@ async def forward_job(resilient: bool = False) -> None:
 
 async def _run_forward_job(SESSION, resilient: bool = False) -> None:
     """Core forwarding logic — runs one full pass through all channels."""
+    from telethon.sessions import StringSession
     # connection_retries=-1 means Telethon retries forever (used in resilient mode)
     connection_retries = -1 if resilient else 5
     if resilient:
         logging.info(
             "Resilient mode ON: will retry connecting indefinitely if network drops."
         )
-    async with TelegramClient(
+        
+    clients = []
+    flood_until = []
+    
+    primary_client = TelegramClient(
         SESSION, CONFIG.login.API_ID, CONFIG.login.API_HASH,
         connection_retries=connection_retries,
         retry_delay=30,
-    ) as client:
-        config.from_to = await config.load_from_to(client, config.CONFIG.forwards)
-        client: TelegramClient
+    )
+    clients.append(primary_client)
+    flood_until.append(0.0)
+    
+    for idx, alt_session in enumerate(CONFIG.login.ALT_SESSION_STRINGS):
+        if alt_session.strip():
+            alt_client = TelegramClient(
+                StringSession(alt_session.strip()), CONFIG.login.API_ID, CONFIG.login.API_HASH,
+                connection_retries=connection_retries,
+                retry_delay=30,
+            )
+            clients.append(alt_client)
+            flood_until.append(0.0)
+            logging.info(f"Loaded alternate session {idx + 1}")
+
+    try:
+        for i, client in enumerate(clients):
+            await client.start()
+            if i > 0:
+                logging.info(f"Alternate account {i} connected successfully.")
+                
+        config.from_to = await config.load_from_to(primary_client, config.CONFIG.forwards)
+        client = primary_client
         unavailable_channels = []
         finished_channels = []
         for from_to, forward in zip(config.from_to.items(), config.CONFIG.forwards):
@@ -81,9 +106,41 @@ async def _run_forward_job(SESSION, resilient: bool = False) -> None:
                         continue
                     if isinstance(message, MessageService):
                         continue
+                    r_event_uid = None
                     while True:
                         try:
-                            tm = await apply_plugins(message)
+                            # 1. Determine active client
+                            now = time.time()
+                            available_idx = -1
+                            for i, ban_time in enumerate(flood_until):
+                                if now >= ban_time:
+                                    available_idx = i
+                                    break
+                                    
+                            if available_idx == -1:
+                                # All clients are flooded. Sleep until the earliest one expires.
+                                earliest = min(flood_until)
+                                wait_time = earliest - now
+                                logging.warning(f"All accounts are in FloodWait. Sleeping for {wait_time:.0f}s")
+                                time.sleep(wait_time)
+                                continue
+                                
+                            active_client_idx = available_idx
+                            active_client = clients[active_client_idx]
+                            
+                            # 2. Get message object for active client
+                            if active_client_idx == 0:
+                                active_message = message
+                            else:
+                                active_message_list = await active_client.get_messages(src, ids=[message.id])
+                                if not active_message_list or not active_message_list[0]:
+                                    logging.warning(f"Account {active_client_idx} cannot access message {message.id} in {src}. Skipping account for 5 mins.")
+                                    flood_until[active_client_idx] = now + 300
+                                    continue
+                                active_message = active_message_list[0]
+                                
+                            # 3. Apply plugins
+                            tm = await apply_plugins(active_message)
                             if not tm:
                                 break
                             st.stored[event_uid] = {}
@@ -100,12 +157,16 @@ async def _run_forward_job(SESSION, resilient: bool = False) -> None:
                                 st.stored[event_uid].update({d: fwded_msg.id})
                             tm.clear()
                             last_id = message.id
-                            logging.info(f"forwarding message with id = {last_id}")
+                            
+                            if active_client_idx > 0:
+                                logging.info(f"forwarding message with id = {last_id} (using account {active_client_idx})")
+                            else:
+                                logging.info(f"forwarding message with id = {last_id}")
+                                
                             forward.offset = last_id
                             write_config(CONFIG, persist=False)
                             time.sleep(CONFIG.past.delay)
-                            logging.info(f"slept for {CONFIG.past.delay} seconds")
-                            break  # success, move to next message
+                            break  # success
 
                         except ChatForwardsRestrictedError:
                             logging.warning(
@@ -115,16 +176,16 @@ async def _run_forward_job(SESSION, resilient: bool = False) -> None:
                             forward.offset = last_id
                             write_config(CONFIG, persist=False)
                             break  # skip this message
+
                         except FloodWaitError as fwe:
-                            # Build a direct Telegram link to the message
-                            # Private supergroup IDs are like -100XXXXXXXXX; strip the -100 prefix
                             channel_id = str(src).replace("-100", "")
                             msg_link = f"https://t.me/c/{channel_id}/{message.id}"
                             logging.warning(
-                                f"FloodWait: sleeping for {fwe.seconds}s before retrying — {msg_link}"
+                                f"Account {active_client_idx} hit FloodWait: sleeping for {fwe.seconds}s before retrying — {msg_link}"
                             )
-                            await asyncio.sleep(delay=fwe.seconds)
-                            # loop continues — retries the same message
+                            flood_until[active_client_idx] = time.time() + fwe.seconds
+                            # Loop continues to retry with the next available account
+
                         except Exception as err:
                             logging.exception(err)
                             break  # skip on unknown error
