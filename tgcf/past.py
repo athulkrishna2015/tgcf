@@ -115,8 +115,9 @@ async def _run_forward_job(SESSION, resilient: bool = False) -> None:
                 try:
                     await clients[i].get_entity(src)
                     allowed_clients.append(i)
+                    logging.info(f"  Alt account {i} ({client_names[i]}) ✓ can access {real_name}")
                 except Exception:
-                    pass
+                    logging.info(f"  Alt account {i} ({client_names[i]}) ✗ cannot access {real_name}")
             
             channel_access_data.append({
                 'src': src,
