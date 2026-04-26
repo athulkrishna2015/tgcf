@@ -73,11 +73,23 @@ async def _run_forward_job(SESSION, resilient: bool = False) -> None:
             flood_until.append(0.0)
             logging.info(f"Loaded alternate session {idx + 1}")
 
-    try:
+        client_names = []
         for i, client in enumerate(clients):
             await client.start()
+            me = await client.get_me()
+            name = getattr(me, 'first_name', '')
+            if getattr(me, 'last_name', ''):
+                name += f" {me.last_name}"
+            if getattr(me, 'username', ''):
+                name += f" (@{me.username})"
+            if not name:
+                name = getattr(me, 'phone', f"Account {i}")
+            client_names.append(name)
+            
             if i > 0:
-                logging.info(f"Alternate account {i} connected successfully.")
+                logging.info(f"Alternate account {i} ({name}) connected successfully.")
+            else:
+                logging.info(f"Primary account ({name}) connected successfully.")
                 
         config.from_to = await config.load_from_to(primary_client, config.CONFIG.forwards)
         client = primary_client
@@ -120,6 +132,7 @@ async def _run_forward_job(SESSION, resilient: bool = False) -> None:
         for i, data in enumerate(channel_access_data):
             logging.info(f"{i+1}. {data['src']} - {len(data['allowed_clients'])} accounts have access")
 
+    try:
         for channel_data in channel_access_data:
             src = channel_data['src']
             dest = channel_data['dest']
@@ -196,7 +209,7 @@ async def _run_forward_job(SESSION, resilient: bool = False) -> None:
                             last_id = message.id
                             
                             if active_client_idx > 0:
-                                logging.info(f"forwarding message with id = {last_id} (using account {active_client_idx})")
+                                logging.info(f"forwarding message with id = {last_id} (using {client_names[active_client_idx]})")
                             else:
                                 logging.info(f"forwarding message with id = {last_id}")
                                 
