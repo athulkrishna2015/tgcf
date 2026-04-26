@@ -94,6 +94,17 @@ async def _run_forward_job(SESSION, resilient: bool = False) -> None:
                 real_name = str(src)
             con_name = forward.con_name if forward.con_name else "Unnamed"
             logging.info(f"Forwarding messages from {src} (Real Name: {real_name}, Config: {con_name}) to {dest}")
+            
+            # Check which alternate clients have access to this source
+            allowed_clients = [0]  # Primary client is assumed to have access
+            for i in range(1, len(clients)):
+                try:
+                    await clients[i].get_entity(src)
+                    allowed_clients.append(i)
+                    logging.info(f"Alternate account {i} verified access to {src}.")
+                except Exception as e:
+                    logging.warning(f"Alternate account {i} cannot access {src} ({e}). It will be skipped for this channel.")
+
             try:
                 async for message in client.iter_messages(
                     src, reverse=True, offset_id=forward.offset
@@ -109,19 +120,19 @@ async def _run_forward_job(SESSION, resilient: bool = False) -> None:
                     r_event_uid = None
                     while True:
                         try:
-                            # 1. Determine active client
+                            # 1. Determine active client from ALLOWED clients
                             now = time.time()
                             available_idx = -1
-                            for i, ban_time in enumerate(flood_until):
-                                if now >= ban_time:
+                            for i in allowed_clients:
+                                if now >= flood_until[i]:
                                     available_idx = i
                                     break
                                     
                             if available_idx == -1:
-                                # All clients are flooded. Sleep until the earliest one expires.
-                                earliest = min(flood_until)
+                                # All ALLOWED clients are flooded. Sleep until the earliest one expires.
+                                earliest = min([flood_until[i] for i in allowed_clients])
                                 wait_time = earliest - now
-                                logging.warning(f"All accounts are in FloodWait. Sleeping for {wait_time:.0f}s")
+                                logging.warning(f"All allowed accounts are in FloodWait. Sleeping for {wait_time:.0f}s")
                                 time.sleep(wait_time)
                                 continue
                                 
@@ -134,7 +145,7 @@ async def _run_forward_job(SESSION, resilient: bool = False) -> None:
                             else:
                                 active_message_list = await active_client.get_messages(src, ids=[message.id])
                                 if not active_message_list or not active_message_list[0]:
-                                    logging.warning(f"Account {active_client_idx} cannot access message {message.id} in {src}. Skipping account for 5 mins.")
+                                    logging.warning(f"Account {active_client_idx} failed to fetch message {message.id}. Skipping for 5 mins.")
                                     flood_until[active_client_idx] = now + 300
                                     continue
                                 active_message = active_message_list[0]
