@@ -11,6 +11,7 @@ A customized version of `tgcf` for automated telegram message forwarding.
 - **Resilient mode**: automatically reconnects and resumes after network outages (`tgcf past --resilient`).
 - **Multiple Sessions**: configure alternate accounts to bypass `FloodWait` limits.
 - **Smart Channel Sorting**: automatically prioritizes processing highly-restricted channels first to maximize account availability before rate limits hit.
+- **Native Batch Forwarding**: automatically groups up to 100 messages per API call if no modifying plugins are active, drastically reducing rate limits.
 - Detailed logging: shows real Telegram channel names, message links for FloodWait retries, and a full summary on completion.
 
 ## Setup
@@ -72,6 +73,10 @@ To use it, add the following **Secrets** to your GitHub repository:
 GitHub Actions does not save changes to the `tgcf.config.json` file across runs. If you need to keep track of the message `offset`, consider using the **MongoDB** integration by setting the `MONGO_CON_STR` environment variable.
 
 ## Changelog
+
+### 2026-04-30
+- feat(past): implement native batch forwarding (up to 100 msgs/call) when no modifying plugins are active to drastically reduce rate limits
+- feat(utils): add `is_batching_safe` helper to detect modifying plugins dynamically
 
 ### 2026-04-26
 - refactor(config): read login secrets from `.env` automatically if empty in `tgcf.config.json` (better security)

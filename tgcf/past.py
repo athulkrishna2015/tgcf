@@ -18,7 +18,7 @@ from tgcf import config
 from tgcf import storage as st
 from tgcf.config import CONFIG, get_SESSION, write_config
 from tgcf.plugins import apply_plugins
-from tgcf.utils import clean_session_files, send_message
+from tgcf.utils import clean_session_files, send_message, is_batching_safe
 
 
 NETWORK_RETRY_DELAY = 30  # seconds to wait before retrying after a network error
@@ -161,17 +161,87 @@ async def _run_forward_job(SESSION, resilient: bool = False) -> None:
                     )
                     
                     try:
-                        async for message in client.iter_messages(
-                            src, reverse=True, offset_id=forward.offset
-                        ):
-                            message: Message
+
+                        batch_safe = is_batching_safe()
+                        batch = []
+                        
+                        async def flush_batch():
+                            nonlocal batch, last_id
+                            if not batch: return
+                            
+                            while True:
+                                try:
+                                    now = time.time()
+                                    available_idx = -1
+                                    for i in allowed_clients:
+                                        if now >= flood_until[i]:
+                                            available_idx = i
+                                            break
+                                            
+                                    if available_idx == -1:
+                                        earliest = min([flood_until[i] for i in allowed_clients])
+                                        wait_time = earliest - now
+                                        for remaining in range(int(wait_time), 0, -1):
+                                            progress.update(task_id, description=f"[bold yellow]FloodWait: all accounts banned. Resuming in {remaining}s[/bold yellow]")
+                                            time.sleep(1)
+                                        continue
+                                        
+                                    active_client_idx = available_idx
+                                    active_client = clients[active_client_idx]
+                                    
+                                    for d in dest:
+                                        fwded_msgs = await active_client.forward_messages(
+                                            d, 
+                                            [m.id for m in batch], 
+                                            src, 
+                                            drop_author=not CONFIG.show_forwarded_from
+                                        )
+                                        
+                                        # Update st.stored for all messages in batch
+                                        for i, m in enumerate(batch):
+                                            event = st.DummyEvent(m.chat_id, m.id)
+                                            event_uid = st.EventUid(event)
+                                            if event_uid not in st.stored:
+                                                st.stored[event_uid] = {}
+                                            if fwded_msgs and i < len(fwded_msgs) and fwded_msgs[i]:
+                                                st.stored[event_uid].update({d: fwded_msgs[i].id})
+                                                
+                                    last_id = batch[-1].id
+                                    msg_link = f"https://t.me/c/{stripped_id}/{last_id}"
+                                    account_name = client_names[active_client_idx]
+                                    progress.update(
+                                        task_id, 
+                                        description=f"Batch: [cyan]{last_id}[/cyan] ({len(batch)} msgs) [dim]({account_name})[/dim] - [blue]{msg_link}[/blue]"
+                                    )
+                                    
+                                    forward.offset = last_id
+                                    write_config(CONFIG, persist=False)
+                                    time.sleep(CONFIG.past.delay)
+                                    batch.clear()
+                                    break
+                                except ChatForwardsRestrictedError:
+                                    logging.warning(f"Skipping batch ending in {batch[-1].id}: chat is protected.")
+                                    last_id = batch[-1].id
+                                    forward.offset = last_id
+                                    write_config(CONFIG, persist=False)
+                                    batch.clear()
+                                    break
+                                except FloodWaitError as fwe:
+                                    logging.warning(f"Account {active_client_idx} hit FloodWait: sleeping for {fwe.seconds}s before retrying")
+                                    flood_until[active_client_idx] = time.time() + fwe.seconds
+                                except Exception as err:
+                                    logging.warning(f"Batch forward failed, falling back to one-by-one. Error: {err}")
+                                    # Fallback one by one
+                                    for m in batch:
+                                        await process_one(m)
+                                    batch.clear()
+                                    break
+                                    
+                        async def process_one(message):
+                            nonlocal last_id
                             event = st.DummyEvent(message.chat_id, message.id)
                             event_uid = st.EventUid(event)
 
-                            if forward.end and last_id > forward.end:
-                                continue
-                            if isinstance(message, MessageService):
-                                continue
                             r_event_uid = None
                             while True:
                                 try:
@@ -257,6 +327,30 @@ async def _run_forward_job(SESSION, resilient: bool = False) -> None:
                                 except Exception as err:
                                     logging.exception(err)
                                     break  # skip on unknown error
+
+                        async for message in client.iter_messages(
+                            src, reverse=True, offset_id=forward.offset
+                        ):
+                            message: Message
+
+                            if forward.end and last_id > forward.end:
+                                continue
+                            if isinstance(message, MessageService):
+                                continue
+                                
+                            if batch_safe:
+                                tm = await apply_plugins(message)
+                                if not tm:
+                                    continue
+                                batch.append(message)
+                                if len(batch) >= 100:
+                                    await flush_batch()
+                            else:
+                                await process_one(message)
+                                
+                        if batch_safe and batch:
+                            await flush_batch()
+
                         finished_channels.append(f"{src} ({real_name} / {con_name})")
                         progress.update(task_id, description="[bold green]Finished[/bold green]", visible=False)
                     except ValueError as err:

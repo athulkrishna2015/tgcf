@@ -43,6 +43,16 @@ async def send_message(recipient: EntityLike, tm: "TgcfMessage") -> Message:
     return await client.send_message(recipient, tm.message, reply_to=tm.reply_to)
 
 
+def is_batching_safe() -> bool:
+    """Check if batch forwarding is safe (no modifying plugins are active)."""
+    modifying_plugins = ["fmt", "mark", "ocr", "replace", "caption"]
+    for p in modifying_plugins:
+        plugin_config = getattr(CONFIG.plugins, p, None)
+        if plugin_config and getattr(plugin_config, "check", False):
+            return False
+    return True
+
+
 def cleanup(*files: str) -> None:
     """Delete the file names passed as args."""
     for file in files:
