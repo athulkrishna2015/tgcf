@@ -343,7 +343,7 @@ async def _run_forward_job(SESSION, resilient: bool = False) -> None:
                                 if not tm:
                                     continue
                                 batch.append(message)
-                                if len(batch) >= 100:
+                                if len(batch) >= CONFIG.past.batch_size:
                                     await flush_batch()
                             else:
                                 await process_one(message)

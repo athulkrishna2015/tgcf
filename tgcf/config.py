@@ -47,6 +47,17 @@ class PastSettings(BaseModel):
 
     # pylint: disable=too-few-public-methods
     delay: int = 0
+    batch_size: int = 25
+
+    @validator("batch_size")
+    def validate_batch_size(cls, val):
+        if val not in range(1, 101):
+            logging.warning("batch_size must be within 1 to 100")
+            if val > 100:
+                val = 100
+            if val < 1:
+                val = 1
+        return val
 
     @validator("delay")
     def validate_delay(cls, val):  # pylint: disable=no-self-use,no-self-argument

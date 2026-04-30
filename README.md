@@ -44,6 +44,8 @@ Run in past mode:
 tgcf past
 ```
 
+By default, past mode will batch forward 25 messages at once (if no modifying plugins are active) to drastically speed up forwarding. You can customize this threshold in your `tgcf.config.json` by adding `batch_size` (up to 100) inside the `past` block.
+
 Run in past mode with automatic network recovery:
 ```bash
 tgcf past --resilient
@@ -77,6 +79,7 @@ GitHub Actions does not save changes to the `tgcf.config.json` file across runs.
 ### 2026-04-30
 - feat(past): implement native batch forwarding (up to 100 msgs/call) when no modifying plugins are active to drastically reduce rate limits
 - feat(utils): add `is_batching_safe` helper to detect modifying plugins dynamically
+- feat(config): make `batch_size` fully configurable in `tgcf.config.json` (defaults to 25, tested stable up to 96)
 
 ### 2026-04-26
 - refactor(config): read login secrets from `.env` automatically if empty in `tgcf.config.json` (better security)
