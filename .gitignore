@@ -17,6 +17,21 @@ tgcf.config_bkp.json
 __pycache__/
 *.pyc
 .fuse_hidden*
+.python-version
 
 # OS files
 .DS_Store
+
+# Python build artifacts
+*.egg-info/
+build/
+dist/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
