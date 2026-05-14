@@ -73,6 +73,12 @@ GitHub Actions does not save changes to the `tgcf.config.json` file across runs.
 
 ## Changelog
 
+### 2026-05-14
+- build: bump version to 1.1.9
+- build: switch to `uv` for environment management and installation
+- fix(deps): resolve `pillow` version conflict with `streamlit`
+- chore(gitignore): update with modern Python and `uv` patterns
+
 ### 2026-04-30
 - feat(past): implement native batch forwarding (up to 100 msgs/call) when no modifying plugins are active to drastically reduce rate limits
 - feat(utils): add `is_batching_safe` helper to detect modifying plugins dynamically

@@ -8,7 +8,7 @@ def read_requirements():
 
 setup(
     name="tgcf",
-    version="1.1.8",
+    version="1.1.9",
     packages=find_packages(),
     install_requires=read_requirements(),
     entry_points={
