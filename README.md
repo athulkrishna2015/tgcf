@@ -74,7 +74,7 @@ GitHub Actions does not save changes to the `tgcf.config.json` file across runs.
 ## Changelog
 
 ### 2026-05-14
-- build: bump version to 1.1.9
+- build: bump version to 2.0.0 (Major Release)
 - build: switch to `uv` for environment management and installation
 - fix(deps): resolve `pillow` version conflict with `streamlit`
 - chore(gitignore): update with modern Python and `uv` patterns
