@@ -48,7 +48,7 @@ class PastSettings(BaseModel):
 
     # pylint: disable=too-few-public-methods
     delay: int = 0
-    batch_size: int = 25
+    batch_size: int = 10
 
     @validator("batch_size")
     def validate_batch_size(cls, val):
@@ -228,7 +228,15 @@ def get_env_var(name: str, optional: bool = False) -> str:
 
 
 async def get_id(client: TelegramClient, peer):
-    return await client.get_peer_id(peer)
+    try:
+        entity = await client.get_entity(peer)
+        return await client.get_peer_id(entity)
+    except Exception as err:
+        logging.warning(f"Failed to get entity for {peer}: {err}")
+        try:
+            return await client.get_peer_id(peer)
+        except Exception:
+            return peer
 
 
 async def load_from_to(

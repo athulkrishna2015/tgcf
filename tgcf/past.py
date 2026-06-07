@@ -326,7 +326,7 @@ async def _run_forward_job(SESSION, resilient: bool = False) -> None:
 
                                 except Exception as err:
                                     logging.exception(err)
-                                    break  # skip on unknown error
+                                    raise err
 
                         async for message in client.iter_messages(
                             src, reverse=True, offset_id=forward.offset
@@ -353,9 +353,9 @@ async def _run_forward_job(SESSION, resilient: bool = False) -> None:
 
                         finished_channels.append(f"{src} ({real_name} / {con_name})")
                         progress.update(task_id, description="[bold green]Finished[/bold green]", visible=False)
-                    except ValueError as err:
+                    except Exception as err:
                         name = forward.con_name if forward.con_name else str(src)
-                        logging.error(f"Could not access source {src} ({name}): {err}")
+                        logging.error(f"Could not process connection {name} (source={src}): {err}")
                         unavailable_channels.append(f"{src} ({name})")
                         progress.update(task_id, description="[bold red]Failed[/bold red]", visible=False)
                         continue
