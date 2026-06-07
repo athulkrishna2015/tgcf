@@ -12,6 +12,7 @@ A customized version of `tgcf` for automated telegram message forwarding.
 - **Multiple Sessions**: configure alternate accounts to bypass `FloodWait` limits.
 - **Smart Channel Sorting**: automatically prioritizes processing highly-restricted channels first to maximize account availability before rate limits hit.
 - **Native Batch Forwarding**: automatically groups up to 100 messages per API call if no modifying plugins are active, drastically reducing rate limits.
+- **Auto Log Rotation**: natively limits the `tgcf.log` size to 10MB (retaining at most 3 backups) to protect disk space.
 - Detailed logging: shows real Telegram channel names, message links for FloodWait retries, and a full summary on completion.
 
 ## Setup
@@ -77,6 +78,7 @@ GitHub Actions does not save changes to the `tgcf.config.json` file across runs.
 ### 2026-06-07
 - feat(plugins): support source-specific plugin configurations (e.g. separate whitelist, blacklist, filter, replace, caption, etc.) per connection/source block in `tgcf.config.json`
 - feat(config): pretty-print and format configuration JSON file (using indent=4) when writing to disk to prevent messy output
+- feat(logging): implement automatic log rotation for `tgcf.log` with a 10MB size limit and a retention of up to 3 backup logs to prevent running out of disk space
 
 ### 2026-05-14
 - build: bump version to 2.0.0 (Major Release)

@@ -9,6 +9,7 @@ from typing import Optional
 
 import typer
 from dotenv import load_dotenv
+from logging.handlers import RotatingFileHandler
 from rich import console, traceback
 from rich.logging import RichHandler
 from verlat import latest_release
@@ -23,6 +24,34 @@ app = typer.Typer(add_completion=False)
 con = console.Console()
 
 
+def setup_logging(level):
+    log_file = "tgcf.log"
+    file_handler = RotatingFileHandler(
+        log_file, maxBytes=10 * 1024 * 1024, backupCount=3, encoding="utf-8"
+    )
+    file_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+
+    root = logging.getLogger()
+    for h in list(root.handlers):
+        root.removeHandler(h)
+
+    logging.basicConfig(
+        level=level,
+        format="%(message)s",
+        handlers=[
+            RichHandler(
+                rich_tracebacks=True,
+                markup=True,
+            ),
+            file_handler
+        ],
+    )
+
+
+# Set up default logging on load
+setup_logging(logging.WARNING)
+
+
 def topper():
     print("tgcf")
     version_check()
@@ -32,6 +61,7 @@ def topper():
 class Mode(str, Enum):
     """tgcf works in two modes."""
 
+    # pylint: disable=invalid-name
     PAST = "past"
     LIVE = "live"
 
@@ -43,16 +73,7 @@ def verbosity_callback(value: bool):
         level = logging.INFO
     else:
         level = logging.WARNING
-    logging.basicConfig(
-        level=level,
-        format="%(message)s",
-        handlers=[
-            RichHandler(
-                rich_tracebacks=True,
-                markup=True,
-            )
-        ],
-    )
+    setup_logging(level)
     topper()
     logging.info("Verbosity turned on! This is suitable for debugging")
 
