@@ -162,7 +162,7 @@ async def _run_forward_job(SESSION, resilient: bool = False) -> None:
                     
                     try:
 
-                        batch_safe = is_batching_safe()
+                        batch_safe = is_batching_safe(forward.plugins)
                         batch = []
                         
                         async def flush_batch():

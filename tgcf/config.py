@@ -31,6 +31,7 @@ class Forward(BaseModel):
     dest: List[Union[int, str]] = []
     offset: int = 0
     end: Optional[int] = 0
+    plugins: Optional[PluginConfig] = None
 
 
 class LiveSettings(BaseModel):
@@ -157,7 +158,7 @@ def write_config_to_file(config: Config):
                 "BOT_TOKEN"
             }
         }
-        file.write(config.json(exclude=exclude_dict))
+        file.write(config.json(exclude=exclude_dict, indent=4))
 
 
 def detect_config_type() -> int:
@@ -250,6 +251,8 @@ async def load_from_to(
     -> Storage is essential for edit, delete and reply syncs
     """
     from_to_dict = {}
+    global from_to_forwards
+    from_to_forwards = {}
 
     async def _(peer):
         return await get_id(client, peer)
@@ -275,6 +278,7 @@ async def load_from_to(
                 pass
 
         src = await _(source)
+        from_to_forwards[src] = forward
 
         cleaned_dest = []
         for d in dest:
@@ -346,5 +350,6 @@ if PASSWORD == "tgcf":
         "You have not set a password to protect the web access to tgcf.\nThe default password `tgcf` is used."
     )
 from_to = {}
+from_to_forwards = {}
 is_bot: Optional[bool] = None
 logging.info("config.py got executed")

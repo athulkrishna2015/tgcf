@@ -12,10 +12,11 @@ from typing import Any, Dict
 from telethon.tl.custom.message import Message
 
 from tgcf.config import CONFIG
-from tgcf.plugin_models import FileType
+from tgcf.plugin_models import FileType, PluginConfig
 from tgcf.utils import cleanup, stamp
 
 PLUGINS = CONFIG.plugins
+_plugins_cache = {}
 
 
 class TgcfMessage:
@@ -61,10 +62,12 @@ class TgcfPlugin:
         return tm
 
 
-def load_plugins() -> Dict[str, TgcfPlugin]:
+def load_plugins(plugins_config: PluginConfig = None) -> Dict[str, TgcfPlugin]:
     """Load the plugins specified in config."""
+    if plugins_config is None:
+        plugins_config = CONFIG.plugins
     _plugins = {}
-    for item in PLUGINS:
+    for item in plugins_config:
         plugin_id = item[0]
         if not item[1].check:
             continue
@@ -99,11 +102,25 @@ def load_plugins() -> Dict[str, TgcfPlugin]:
     return _plugins
 
 
+def get_plugins_for_config(plugins_config: PluginConfig) -> Dict[str, TgcfPlugin]:
+    config_id = id(plugins_config)
+    if config_id not in _plugins_cache:
+        _plugins_cache[config_id] = load_plugins(plugins_config)
+    return _plugins_cache[config_id]
+
+
 async def apply_plugins(message: Message) -> TgcfMessage:
     """Apply all loaded plugins to a message."""
     tm = TgcfMessage(message)
 
-    for _id, plugin in plugins.items():
+    from tgcf.config import from_to_forwards
+    forward = from_to_forwards.get(message.chat_id)
+    if forward and forward.plugins:
+        active_plugins = get_plugins_for_config(forward.plugins)
+    else:
+        active_plugins = plugins
+
+    for _id, plugin in active_plugins.items():
         try:
             if inspect.iscoroutinefunction(plugin.modify):
                 ntm = await plugin.modify(tm)

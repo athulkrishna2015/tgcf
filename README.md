@@ -3,8 +3,8 @@
 A customized version of `tgcf` for automated telegram message forwarding.
 
 ## Features
-- Forward messages from past history or live.
 - Filter messages based on text, users, or file types.
+- **Source-Specific Plugins**: configure custom plugins (whitelist, blacklist, filter, text replacement, caption style, etc.) for each connection separately.
 - Supports protected chats (gracefully skips restricted content).
 - Gracefully handles unavailable or missing source channels by skipping them and reporting errors at the end.
 - Robust ID handling for different Telegram peer formats.
@@ -72,6 +72,10 @@ To use it, add the following **Secrets** to your GitHub repository:
 GitHub Actions does not save changes to the `tgcf.config.json` file across runs. If you need to keep track of the message `offset`, consider using the **MongoDB** integration by setting the `MONGO_CON_STR` environment variable.
 
 ## Changelog
+
+### 2026-06-07
+- feat(plugins): support source-specific plugin configurations (e.g. separate whitelist, blacklist, filter, replace, caption, etc.) per connection/source block in `tgcf.config.json`
+- feat(config): pretty-print and format configuration JSON file (using indent=4) when writing to disk to prevent messy output
 
 ### 2026-05-14
 - build: bump version to 2.0.0 (Major Release)
