@@ -74,300 +74,313 @@ async def _run_forward_job(SESSION, resilient: bool = False) -> None:
             flood_until.append(0.0)
             logging.info(f"Loaded alternate session {idx + 1}")
 
-        client_names = []
-        for i, client in enumerate(clients):
-            await client.start()
-            me = await client.get_me()
-            name = getattr(me, 'first_name', '')
-            if getattr(me, 'last_name', ''):
-                name += f" {me.last_name}"
-            if getattr(me, 'username', ''):
-                name += f" (@{me.username})"
-            if not name:
-                name = getattr(me, 'phone', f"Account {i}")
-            client_names.append(name)
-            
-            if i > 0:
-                logging.info(f"Alternate account {i} ({name}) connected successfully.")
-            else:
-                logging.info(f"Primary account ({name}) connected successfully.")
-                
-        config.from_to = await config.load_from_to(primary_client, config.CONFIG.forwards)
-        client = primary_client
-        unavailable_channels = []
-        finished_channels = []
-        # Upfront access check and smart sorting
-        logging.info("Performing upfront access checks for smart channel sorting...")
-        channel_access_data = []
-        for from_to, forward in zip(config.from_to.items(), config.CONFIG.forwards):
-            src, dest = from_to
-            has_ttl = False
-            try:
-                src_entity = await primary_client.get_entity(src)
-                real_name = getattr(src_entity, 'title', getattr(src_entity, 'username', str(src)))
-                has_ttl = bool(getattr(src_entity, 'ttl_period', 0))
-            except Exception:
-                real_name = str(src)
-            con_name = forward.con_name if forward.con_name else "Unnamed"
-            
-            allowed_clients = [0]  # Primary client is assumed to have access
-            for i in range(1, len(clients)):
-                try:
-                    await clients[i].get_entity(src)
-                    allowed_clients.append(i)
-                    logging.info(f"  Alt account {i} ({client_names[i]}) ✓ can access {real_name}")
-                except Exception:
-                    logging.info(f"  Alt account {i} ({client_names[i]}) ✗ cannot access {real_name}")
-            
-            channel_access_data.append({
-                'src': src,
-                'dest': dest,
-                'forward': forward,
-                'real_name': real_name,
-                'con_name': con_name,
-                'allowed_clients': allowed_clients,
-                'has_ttl': has_ttl
-            })
-            
-        # Sort channels by presence of delete timer, then number of allowed clients (ascending)
-        # Channels with delete timers (TTL) are processed FIRST, then channels with fewest accounts
-        channel_access_data.sort(key=lambda x: (not x['has_ttl'], len(x['allowed_clients'])))
+    client_names = []
+    for i, client in enumerate(clients):
+        await client.start()
+        me = await client.get_me()
+        name = getattr(me, 'first_name', '')
+        if getattr(me, 'last_name', ''):
+            name += f" {me.last_name}"
+        if getattr(me, 'username', ''):
+            name += f" (@{me.username})"
+        if not name:
+            name = getattr(me, 'phone', f"Account {i}")
+        client_names.append(name)
         
-        logging.info("Smart sorting complete. Processing order:")
-        for i, data in enumerate(channel_access_data):
-            ttl_str = "[Timer] " if data['has_ttl'] else ""
-            logging.info(f"{i+1}. {ttl_str}{data['src']} - {len(data['allowed_clients'])} accounts have access")
-
+        if i > 0:
+            logging.info(f"Alternate account {i} ({name}) connected successfully.")
+        else:
+            logging.info(f"Primary account ({name}) connected successfully.")
+            
+    config.from_to = await config.load_from_to(primary_client, config.CONFIG.forwards)
+    client = primary_client
+    unavailable_channels = []
+    finished_channels = []
+    # Upfront access check and smart sorting
+    logging.info("Performing upfront access checks for smart channel sorting...")
+    channel_access_data = []
+    for from_to, forward in zip(config.from_to.items(), config.CONFIG.forwards):
+        src, dest = from_to
+        real_name = forward.source_name
+        has_ttl = False
         try:
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[bold blue]{task.fields[channel]}[/bold blue]"),
-                TextColumn("[progress.description]{task.description}"),
-                TimeElapsedColumn(),
-            ) as progress:
-                for channel_data in channel_access_data:
-                    src = channel_data['src']
-                    dest = channel_data['dest']
-                    forward = channel_data['forward']
-                    real_name = channel_data['real_name']
-                    con_name = channel_data['con_name']
-                    allowed_clients = channel_data['allowed_clients']
-                    last_id = 0
-                    
-                    stripped_id = str(src).replace("-100", "")
-                    task_id = progress.add_task(
-                        "Connecting...",
-                        channel=f"{real_name[:20]:<20}",
-                    )
-                    
-                    try:
-
-                        batch_safe = is_batching_safe(forward.plugins)
-                        batch = []
-                        
-                        async def flush_batch():
-                            nonlocal batch, last_id
-                            if not batch: return
-                            
-                            while True:
-                                try:
-                                    now = time.time()
-                                    available_idx = -1
-                                    for i in allowed_clients:
-                                        if now >= flood_until[i]:
-                                            available_idx = i
-                                            break
-                                            
-                                    if available_idx == -1:
-                                        earliest = min([flood_until[i] for i in allowed_clients])
-                                        wait_time = earliest - now
-                                        for remaining in range(int(wait_time), 0, -1):
-                                            progress.update(task_id, description=f"[bold yellow]FloodWait: all accounts banned. Resuming in {remaining}s[/bold yellow]")
-                                            time.sleep(1)
-                                        continue
-                                        
-                                    active_client_idx = available_idx
-                                    active_client = clients[active_client_idx]
-                                    
-                                    for d in dest:
-                                        fwded_msgs = await active_client.forward_messages(
-                                            d, 
-                                            [m.id for m in batch], 
-                                            src, 
-                                            drop_author=not CONFIG.show_forwarded_from
-                                        )
-                                        
-                                        # Update st.stored for all messages in batch
-                                        for i, m in enumerate(batch):
-                                            event = st.DummyEvent(m.chat_id, m.id)
-                                            event_uid = st.EventUid(event)
-                                            if event_uid not in st.stored:
-                                                st.stored[event_uid] = {}
-                                            if fwded_msgs and i < len(fwded_msgs) and fwded_msgs[i]:
-                                                st.stored[event_uid].update({d: fwded_msgs[i].id})
-                                                
-                                    last_id = batch[-1].id
-                                    msg_link = f"https://t.me/c/{stripped_id}/{last_id}"
-                                    account_name = client_names[active_client_idx]
-                                    progress.update(
-                                        task_id, 
-                                        description=f"Batch: [cyan]{last_id}[/cyan] ({len(batch)} msgs) [dim]({account_name})[/dim] - [blue]{msg_link}[/blue]"
-                                    )
-                                    
-                                    forward.offset = last_id
-                                    write_config(CONFIG, persist=False)
-                                    time.sleep(CONFIG.past.delay)
-                                    batch.clear()
-                                    break
-                                except ChatForwardsRestrictedError:
-                                    logging.warning(f"Skipping batch ending in {batch[-1].id}: chat is protected.")
-                                    last_id = batch[-1].id
-                                    forward.offset = last_id
-                                    write_config(CONFIG, persist=False)
-                                    batch.clear()
-                                    break
-                                except FloodWaitError as fwe:
-                                    logging.warning(f"Account {active_client_idx} hit FloodWait: sleeping for {fwe.seconds}s before retrying")
-                                    flood_until[active_client_idx] = time.time() + fwe.seconds
-                                except Exception as err:
-                                    logging.warning(f"Batch forward failed, falling back to one-by-one. Error: {err}")
-                                    # Fallback one by one
-                                    for m in batch:
-                                        await process_one(m)
-                                    batch.clear()
-                                    break
-                                    
-                        async def process_one(message):
-                            nonlocal last_id
-                            event = st.DummyEvent(message.chat_id, message.id)
-                            event_uid = st.EventUid(event)
-
-                            r_event_uid = None
-                            while True:
-                                try:
-                                    # 1. Determine active client from ALLOWED clients
-                                    now = time.time()
-                                    available_idx = -1
-                                    for i in allowed_clients:
-                                        if now >= flood_until[i]:
-                                            available_idx = i
-                                            break
-                                            
-                                    if available_idx == -1:
-                                        # All ALLOWED clients are flooded. Sleep until the earliest one expires.
-                                        earliest = min([flood_until[i] for i in allowed_clients])
-                                        wait_time = earliest - now
-                                        for remaining in range(int(wait_time), 0, -1):
-                                            progress.update(task_id, description=f"[bold yellow]FloodWait: all accounts banned. Resuming in {remaining}s[/bold yellow]")
-                                            time.sleep(1)
-                                        continue
-                                        
-                                    active_client_idx = available_idx
-                                    active_client = clients[active_client_idx]
-                                    
-                                    # 2. Get message object for active client
-                                    if active_client_idx == 0:
-                                        active_message = message
-                                    else:
-                                        active_message_list = await active_client.get_messages(src, ids=[message.id])
-                                        if not active_message_list or not active_message_list[0]:
-                                            progress.update(task_id, description=f"[bold red]Account {active_client_idx} failed to fetch {message.id}[/bold red]")
-                                            flood_until[active_client_idx] = now + 300
-                                            continue
-                                        active_message = active_message_list[0]
-                                        
-                                    # 3. Apply plugins
-                                    tm = await apply_plugins(active_message)
-                                    if not tm:
-                                        break
-                                    st.stored[event_uid] = {}
-
-                                    if message.is_reply:
-                                        r_event = st.DummyEvent(
-                                            message.chat_id, message.reply_to_msg_id
-                                        )
-                                        r_event_uid = st.EventUid(r_event)
-                                    for d in dest:
-                                        if message.is_reply and r_event_uid in st.stored:
-                                            tm.reply_to = st.stored.get(r_event_uid).get(d)
-                                        fwded_msg = await send_message(d, tm)
-                                        st.stored[event_uid].update({d: fwded_msg.id})
-                                    tm.clear()
-                                    last_id = message.id
-                                    
-                                    msg_link = f"https://t.me/c/{stripped_id}/{last_id}"
-                                    account_name = client_names[active_client_idx]
-                                    progress.update(
-                                        task_id, 
-                                        description=f"Msg: [cyan]{last_id}[/cyan] [dim]({account_name})[/dim] - [blue]{msg_link}[/blue]"
-                                    )
-                                    
-                                    forward.offset = last_id
-                                    write_config(CONFIG, persist=False)
-                                    time.sleep(CONFIG.past.delay)
-                                    break  # success
-
-                                except ChatForwardsRestrictedError:
-                                    logging.warning(
-                                        f"Skipping message {message.id} in {src}: chat is protected."
-                                    )
-                                    last_id = message.id
-                                    forward.offset = last_id
-                                    write_config(CONFIG, persist=False)
-                                    break  # skip this message
-
-                                except FloodWaitError as fwe:
-                                    msg_link = f"https://t.me/c/{stripped_id}/{message.id}"
-                                    logging.warning(
-                                        f"Account {active_client_idx} hit FloodWait: sleeping for {fwe.seconds}s before retrying — {msg_link}"
-                                    )
-                                    flood_until[active_client_idx] = time.time() + fwe.seconds
-                                    # Loop continues to retry with the next available account
-
-                                except Exception as err:
-                                    logging.exception(err)
-                                    raise err
-
-                        async for message in client.iter_messages(
-                            src, reverse=True, offset_id=forward.offset
-                        ):
-                            message: Message
-
-                            if forward.end and last_id > forward.end:
-                                continue
-                            if isinstance(message, MessageService):
-                                continue
-                                
-                            if batch_safe:
-                                tm = await apply_plugins(message)
-                                if not tm:
-                                    continue
-                                batch.append(message)
-                                if len(batch) >= CONFIG.past.batch_size:
-                                    await flush_batch()
-                            else:
-                                await process_one(message)
-                                
-                        if batch_safe and batch:
-                            await flush_batch()
-
-                        finished_channels.append(f"{src} ({real_name} / {con_name})")
-                        progress.update(task_id, description="[bold green]Finished[/bold green]", visible=False)
-                    except Exception as err:
-                        name = forward.con_name if forward.con_name else str(src)
-                        logging.error(f"Could not process connection {name} (source={src}): {err}")
-                        unavailable_channels.append(f"{src} ({name})")
-                        progress.update(task_id, description="[bold red]Failed[/bold red]", visible=False)
-                        continue
+            src_entity = await primary_client.get_entity(src)
+            has_ttl = bool(getattr(src_entity, "ttl_period", 0))
+        except Exception:
+            pass
+        con_name = forward.con_name if forward.con_name else "Unnamed"
         
-            if finished_channels:
-                logging.info("=== Past mode complete. Channels processed: ===")
-                for ch in finished_channels:
-                    logging.info(f"  ✓ {ch}")
-            if unavailable_channels:
-                logging.error("=== Unavailable channels (could not access): ===")
-                for ch in unavailable_channels:
-                    logging.error(f"  ✗ {ch}")
-        finally:
-            for client in clients:
-                await client.disconnect()
+        allowed_clients = []
+        for i in range(len(clients)):
+            try:
+                await clients[i].get_entity(src)
+                for d in dest:
+                    await clients[i].get_entity(d)
+                allowed_clients.append(i)
+                if i == 0:
+                    logging.info(f"  Primary account ({client_names[0]}) ✓ can access {real_name} and all destinations")
+                else:
+                    logging.info(f"  Alt account {i} ({client_names[i]}) ✓ can access {real_name} and all destinations")
+            except Exception as e:
+                if i == 0:
+                    logging.info(f"  Primary account ({client_names[0]}) ✗ cannot access connection (source/dest) — error: {e}")
+                else:
+                    logging.info(f"  Alt account {i} ({client_names[i]}) ✗ cannot access connection (source/dest) — error: {e}")
+        
+        channel_access_data.append({
+            'src': src,
+            'dest': dest,
+            'forward': forward,
+            'real_name': real_name,
+            'con_name': con_name,
+            'allowed_clients': allowed_clients,
+            'has_ttl': has_ttl
+        })
+        
+    # Sort channels by presence of delete timer, then number of allowed clients (ascending)
+    # Channels with delete timers (TTL) are processed FIRST, then channels with fewest accounts
+    channel_access_data.sort(key=lambda x: (not x['has_ttl'], len(x['allowed_clients'])))
+    
+    logging.info("Smart sorting complete. Processing order:")
+    for i, data in enumerate(channel_access_data):
+        ttl_str = "[Timer] " if data['has_ttl'] else ""
+        logging.info(f"{i+1}. {ttl_str}{data['src']} - {len(data['allowed_clients'])} accounts have access")
+
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[bold blue]{task.fields[channel]}[/bold blue]"),
+            TextColumn("[progress.description]{task.description}"),
+            TimeElapsedColumn(),
+        ) as progress:
+            for channel_data in channel_access_data:
+                src = channel_data['src']
+                dest = channel_data['dest']
+                forward = channel_data['forward']
+                real_name = channel_data['real_name']
+                con_name = channel_data['con_name']
+                allowed_clients = channel_data['allowed_clients']
+                if not allowed_clients:
+                    name = con_name if con_name else str(src)
+                    logging.error(f"Could not process connection {name} (source={src}): No accounts have access to both source and destinations.")
+                    unavailable_channels.append(f"{src} ({name})")
+                    continue
+                last_id = 0
+                
+                stripped_id = str(src).replace("-100", "")
+                task_id = progress.add_task(
+                    "Connecting...",
+                    channel=f"{real_name[:20]:<20}",
+                )
+                
+                try:
+
+                    batch_safe = is_batching_safe(forward.plugins)
+                    batch = []
+                    
+                    async def flush_batch():
+                        nonlocal batch, last_id
+                        if not batch: return
+                        
+                        while True:
+                            try:
+                                now = time.time()
+                                available_idx = -1
+                                for i in allowed_clients:
+                                    if now >= flood_until[i]:
+                                        available_idx = i
+                                        break
+                                        
+                                if available_idx == -1:
+                                    earliest = min([flood_until[i] for i in allowed_clients])
+                                    wait_time = earliest - now
+                                    for remaining in range(int(wait_time), 0, -1):
+                                        progress.update(task_id, description=f"[bold yellow]FloodWait: all accounts banned. Resuming in {remaining}s[/bold yellow]")
+                                        time.sleep(1)
+                                    continue
+                                    
+                                active_client_idx = available_idx
+                                active_client = clients[active_client_idx]
+                                
+                                for d in dest:
+                                    fwded_msgs = await active_client.forward_messages(
+                                        d, 
+                                        [m.id for m in batch], 
+                                        src, 
+                                        drop_author=not CONFIG.show_forwarded_from
+                                    )
+                                    
+                                    # Update st.stored for all messages in batch
+                                    for i, m in enumerate(batch):
+                                        event = st.DummyEvent(m.chat_id, m.id)
+                                        event_uid = st.EventUid(event)
+                                        if event_uid not in st.stored:
+                                            st.stored[event_uid] = {}
+                                        if fwded_msgs and i < len(fwded_msgs) and fwded_msgs[i]:
+                                            st.stored[event_uid].update({d: fwded_msgs[i].id})
+                                            
+                                last_id = batch[-1].id
+                                msg_link = f"https://t.me/c/{stripped_id}/{last_id}"
+                                account_name = client_names[active_client_idx]
+                                progress.update(
+                                    task_id, 
+                                    description=f"Batch: [cyan]{last_id}[/cyan] ({len(batch)} msgs) [dim]({account_name})[/dim] - [blue]{msg_link}[/blue]"
+                                )
+                                
+                                forward.offset = last_id
+                                write_config(CONFIG, persist=False)
+                                time.sleep(CONFIG.past.delay)
+                                batch.clear()
+                                break
+                            except ChatForwardsRestrictedError:
+                                logging.warning(f"Skipping batch ending in {batch[-1].id}: chat is protected.")
+                                last_id = batch[-1].id
+                                forward.offset = last_id
+                                write_config(CONFIG, persist=False)
+                                batch.clear()
+                                break
+                            except FloodWaitError as fwe:
+                                logging.warning(f"Account {active_client_idx} hit FloodWait: sleeping for {fwe.seconds}s before retrying")
+                                flood_until[active_client_idx] = time.time() + fwe.seconds
+                            except Exception as err:
+                                logging.warning(f"Batch forward failed, falling back to one-by-one. Error: {err}")
+                                # Fallback one by one
+                                for m in batch:
+                                    await process_one(m)
+                                batch.clear()
+                                break
+                                
+                    async def process_one(message):
+                        nonlocal last_id
+                        event = st.DummyEvent(message.chat_id, message.id)
+                        event_uid = st.EventUid(event)
+
+                        r_event_uid = None
+                        while True:
+                            try:
+                                # 1. Determine active client from ALLOWED clients
+                                now = time.time()
+                                available_idx = -1
+                                for i in allowed_clients:
+                                    if now >= flood_until[i]:
+                                        available_idx = i
+                                        break
+                                        
+                                if available_idx == -1:
+                                    # All ALLOWED clients are flooded. Sleep until the earliest one expires.
+                                    earliest = min([flood_until[i] for i in allowed_clients])
+                                    wait_time = earliest - now
+                                    for remaining in range(int(wait_time), 0, -1):
+                                        progress.update(task_id, description=f"[bold yellow]FloodWait: all accounts banned. Resuming in {remaining}s[/bold yellow]")
+                                        time.sleep(1)
+                                    continue
+                                    
+                                active_client_idx = available_idx
+                                active_client = clients[active_client_idx]
+                                
+                                # 2. Get message object for active client
+                                if active_client_idx == 0:
+                                    active_message = message
+                                else:
+                                    active_message_list = await active_client.get_messages(src, ids=[message.id])
+                                    if not active_message_list or not active_message_list[0]:
+                                        progress.update(task_id, description=f"[bold red]Account {active_client_idx} failed to fetch {message.id}[/bold red]")
+                                        flood_until[active_client_idx] = now + 300
+                                        continue
+                                    active_message = active_message_list[0]
+                                    
+                                # 3. Apply plugins
+                                tm = await apply_plugins(active_message)
+                                if not tm:
+                                    break
+                                st.stored[event_uid] = {}
+
+                                if message.is_reply:
+                                    r_event = st.DummyEvent(
+                                        message.chat_id, message.reply_to_msg_id
+                                    )
+                                    r_event_uid = st.EventUid(r_event)
+                                for d in dest:
+                                    if message.is_reply and r_event_uid in st.stored:
+                                        tm.reply_to = st.stored.get(r_event_uid).get(d)
+                                    fwded_msg = await send_message(d, tm)
+                                    st.stored[event_uid].update({d: fwded_msg.id})
+                                tm.clear()
+                                last_id = message.id
+                                
+                                msg_link = f"https://t.me/c/{stripped_id}/{last_id}"
+                                account_name = client_names[active_client_idx]
+                                progress.update(
+                                    task_id, 
+                                    description=f"Msg: [cyan]{last_id}[/cyan] [dim]({account_name})[/dim] - [blue]{msg_link}[/blue]"
+                                )
+                                
+                                forward.offset = last_id
+                                write_config(CONFIG, persist=False)
+                                time.sleep(CONFIG.past.delay)
+                                break  # success
+
+                            except ChatForwardsRestrictedError:
+                                logging.warning(
+                                    f"Skipping message {message.id} in {src}: chat is protected."
+                                )
+                                last_id = message.id
+                                forward.offset = last_id
+                                write_config(CONFIG, persist=False)
+                                break  # skip this message
+
+                            except FloodWaitError as fwe:
+                                msg_link = f"https://t.me/c/{stripped_id}/{message.id}"
+                                logging.warning(
+                                    f"Account {active_client_idx} hit FloodWait: sleeping for {fwe.seconds}s before retrying — {msg_link}"
+                                )
+                                flood_until[active_client_idx] = time.time() + fwe.seconds
+                                # Loop continues to retry with the next available account
+
+                            except Exception as err:
+                                logging.exception(err)
+                                raise err
+
+                    async for message in client.iter_messages(
+                        src, reverse=True, offset_id=forward.offset
+                    ):
+                        message: Message
+
+                        if forward.end and last_id > forward.end:
+                            continue
+                        if isinstance(message, MessageService):
+                            continue
+                            
+                        if batch_safe:
+                            tm = await apply_plugins(message)
+                            if not tm:
+                                continue
+                            batch.append(message)
+                            if len(batch) >= CONFIG.past.batch_size:
+                                await flush_batch()
+                        else:
+                            await process_one(message)
+                            
+                    if batch_safe and batch:
+                        await flush_batch()
+
+                    finished_channels.append(f"{src} ({real_name} / {con_name})")
+                    progress.update(task_id, description="[bold green]Finished[/bold green]", visible=False)
+                except Exception as err:
+                    name = forward.con_name if forward.con_name else str(src)
+                    logging.error(f"Could not process connection {name} (source={src}): {err}")
+                    unavailable_channels.append(f"{src} ({name})")
+                    progress.update(task_id, description="[bold red]Failed[/bold red]", visible=False)
+                    continue
+    
+        if finished_channels:
+            logging.info("=== Past mode complete. Channels processed: ===")
+            for ch in finished_channels:
+                logging.info(f"  ✓ {ch}")
+        if unavailable_channels:
+            logging.error("=== Unavailable channels (could not access): ===")
+            for ch in unavailable_channels:
+                logging.error(f"  ✗ {ch}")
+    finally:
+        for client in clients:
+            await client.disconnect()

@@ -26,6 +26,8 @@ class Forward(BaseModel):
 
     # pylint: disable=too-few-public-methods
     con_name: str = ""
+    source_name: str = ""
+    dest_names: List[str] = []
     use_this: bool = True
     source: Union[int, str] = ""
     dest: List[Union[int, str]] = []
@@ -286,18 +288,44 @@ async def load_from_to(
                 pass
 
         src = await _(source)
+        try:
+            src_entity = await client.get_entity(src)
+            source_name = getattr(src_entity, "title", getattr(src_entity, "username", str(src)))
+        except Exception:
+            source_name = str(src)
+
+        if isinstance(forward, dict):
+            forward["source_name"] = source_name
+        else:
+            forward.source_name = source_name
+
         from_to_forwards[src] = forward
 
         cleaned_dest = []
+        dest_names = []
         for d in dest:
             if isinstance(d, str):
                 try:
                     d = int(d)
                 except ValueError:
                     pass
-            cleaned_dest.append(d)
+            id_ = await _(d)
+            cleaned_dest.append(id_)
+            try:
+                dest_entity = await client.get_entity(id_)
+                dest_names.append(
+                    getattr(dest_entity, "title", getattr(dest_entity, "username", str(id_)))
+                )
+            except Exception:
+                dest_names.append(str(id_))
 
-        from_to_dict[src] = [await _(d) for d in cleaned_dest]
+        if isinstance(forward, dict):
+            forward["dest_names"] = dest_names
+        else:
+            forward.dest_names = dest_names
+
+        from_to_dict[src] = cleaned_dest
+    write_config(CONFIG)
     logging.info(f"From to dict is {from_to_dict}")
     return from_to_dict
 
