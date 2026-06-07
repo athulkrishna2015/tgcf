@@ -45,12 +45,22 @@ async def send_message(recipient: EntityLike, tm: "TgcfMessage") -> Message:
 
 def is_batching_safe(plugins_config: PluginConfig = None) -> bool:
     """Check if batch forwarding is safe (no modifying plugins are active)."""
-    if plugins_config is None:
-        plugins_config = CONFIG.plugins
     modifying_plugins = ["fmt", "mark", "ocr", "replace", "caption"]
     for p in modifying_plugins:
-        plugin_config = getattr(plugins_config, p, None)
-        if plugin_config and getattr(plugin_config, "check", False):
+        # Check if active globally
+        global_active = False
+        global_p = getattr(CONFIG.plugins, p, None)
+        if global_p and getattr(global_p, "check", False):
+            global_active = True
+
+        # Check if active locally
+        local_active = False
+        if plugins_config is not None:
+            local_p = getattr(plugins_config, p, None)
+            if local_p and getattr(local_p, "check", False):
+                local_active = True
+
+        if global_active or local_active:
             return False
     return True
 

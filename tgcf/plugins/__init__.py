@@ -113,14 +113,31 @@ async def apply_plugins(message: Message) -> TgcfMessage:
     """Apply all loaded plugins to a message."""
     tm = TgcfMessage(message)
 
-    from tgcf.config import from_to_forwards
+    from tgcf.config import from_to_forwards, CONFIG
     forward = from_to_forwards.get(message.chat_id)
-    if forward and forward.plugins:
-        active_plugins = get_plugins_for_config(forward.plugins)
-    else:
-        active_plugins = plugins
 
-    for _id, plugin in active_plugins.items():
+    # Merge local and global active plugins:
+    # If a plugin is enabled locally (check=True), use the local instance.
+    # Otherwise, fall back to the global instance.
+    global_active = get_plugins_for_config(CONFIG.plugins)
+    active_plugins = {}
+
+    if forward and forward.plugins:
+        local_active = get_plugins_for_config(forward.plugins)
+        plugin_names = ["filter", "fmt", "mark", "ocr", "replace", "caption"]
+        for p_name in plugin_names:
+            if p_name in local_active:
+                active_plugins[p_name] = local_active[p_name]
+            elif p_name in global_active:
+                active_plugins[p_name] = global_active[p_name]
+    else:
+        active_plugins = global_active
+
+    plugin_order = ["filter", "fmt", "mark", "ocr", "replace", "caption"]
+    for _id in plugin_order:
+        plugin = active_plugins.get(_id)
+        if not plugin:
+            continue
         try:
             if inspect.iscoroutinefunction(plugin.modify):
                 ntm = await plugin.modify(tm)

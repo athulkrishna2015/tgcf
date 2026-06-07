@@ -31,7 +31,7 @@ class Forward(BaseModel):
     dest: List[Union[int, str]] = []
     offset: int = 0
     end: Optional[int] = 0
-    plugins: Optional[PluginConfig] = None
+    plugins: Optional[PluginConfig] = PluginConfig()
 
 
 class LiveSettings(BaseModel):
