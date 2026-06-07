@@ -109,6 +109,8 @@ GitHub Actions does not save changes to the `tgcf.config.json` file across runs.
 ### 2026-06-07
 - feat(plugins): support source-specific plugin configurations (e.g. separate whitelist, blacklist, filter, replace, caption, etc.) per connection/source block in `tgcf.config.json`
 - feat(config): automatically fetch and update Telegram channel names (`source_name`, `dest_names`) in `tgcf.config.json` for easier management
+- feat(past): implement persistent access cache (`tgcf.access.json`) to skip re-checking accounts that lack access to specific channels, significantly speeding up startup
+- feat(past): add `--clear-cache` flag to manually reset the access cache when needed
 - feat(config): pretty-print and format configuration JSON file (using indent=4) when writing to disk to prevent messy output
 - feat(logging): implement automatic log rotation for `tgcf.log` with a 10MB size limit and a retention of up to 3 backup logs to prevent running out of disk space
 

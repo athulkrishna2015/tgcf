@@ -128,6 +128,11 @@ def main(
         "-r",
         help="(past mode only) Automatically retry on network errors and resume from last offset.",
     ),
+    clear_cache: bool = typer.Option(
+        False,
+        "--clear-cache",
+        help="(past mode only) Delete the access cache before starting.",
+    ),
 ):
     """The ultimate tool to automate custom telegram message forwarding.
 
@@ -144,7 +149,7 @@ def main(
     if mode == Mode.PAST:
         from tgcf.past import forward_job  # pylint: disable=import-outside-toplevel
 
-        asyncio.run(forward_job(resilient=resilient))
+        asyncio.run(forward_job(resilient=resilient, clear_cache=clear_cache))
     else:
         from tgcf.live import start_sync  # pylint: disable=import-outside-toplevel
 

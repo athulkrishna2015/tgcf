@@ -6,6 +6,7 @@
 
 import asyncio
 import logging
+import os
 import time
 
 from telethon import TelegramClient
@@ -24,25 +25,31 @@ from tgcf.utils import clean_session_files, send_message, is_batching_safe
 NETWORK_RETRY_DELAY = 30  # seconds to wait before retrying after a network error
 
 
-async def forward_job(resilient: bool = False) -> None:
+async def forward_job(resilient: bool = False, clear_cache: bool = False) -> None:
     """Forward all existing messages in the concerned chats.
 
     Args:
         resilient: If True, Telethon will retry connecting forever on network errors
                    instead of giving up after 5 attempts. Progress is preserved via
                    saved offsets, so it always resumes from the last forwarded message.
+        clear_cache: If True, deletes the access cache file before starting.
     """
     clean_session_files()
+    if clear_cache:
+        if os.path.exists(config.ACCESS_CACHE_FILE):
+            os.remove(config.ACCESS_CACHE_FILE)
+            logging.info("Access cache cleared.")
+
     if CONFIG.login.user_type != 1:
         logging.warning(
             "You cannot use bot account for tgcf past mode. Telegram does not allow bots to access chat history."
         )
         return
     SESSION = get_SESSION()
-    await _run_forward_job(SESSION, resilient=resilient)
+    await _run_forward_job(SESSION, resilient=resilient, clear_cache=clear_cache)
 
 
-async def _run_forward_job(SESSION, resilient: bool = False) -> None:
+async def _run_forward_job(SESSION, resilient: bool = False, clear_cache: bool = False) -> None:
     """Core forwarding logic — runs one full pass through all channels."""
     from telethon.sessions import StringSession
     # connection_retries=-1 means Telethon retries forever (used in resilient mode)
