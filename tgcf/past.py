@@ -75,9 +75,11 @@ async def _run_forward_job(SESSION, resilient: bool = False) -> None:
             logging.info(f"Loaded alternate session {idx + 1}")
 
     client_names = []
+    client_user_ids = []
     for i, client in enumerate(clients):
         await client.start()
         me = await client.get_me()
+        client_user_ids.append(me.id)
         name = getattr(me, 'first_name', '')
         if getattr(me, 'last_name', ''):
             name += f" {me.last_name}"
@@ -98,6 +100,7 @@ async def _run_forward_job(SESSION, resilient: bool = False) -> None:
     finished_channels = []
     # Upfront access check and smart sorting
     logging.info("Performing upfront access checks for smart channel sorting...")
+    access_cache = config.read_access_cache()
     channel_access_data = []
     for from_to, forward in zip(config.from_to.items(), config.CONFIG.forwards):
         src, dest = from_to
@@ -112,6 +115,11 @@ async def _run_forward_job(SESSION, resilient: bool = False) -> None:
         
         allowed_clients = []
         for i in range(len(clients)):
+            uid = client_user_ids[i]
+            if str(src) in access_cache and uid in access_cache[str(src)]:
+                logging.info(f"  Account {i} ({client_names[i]}) skipped (cached no-access for {real_name})")
+                continue
+
             try:
                 await clients[i].get_entity(src)
                 for d in dest:
@@ -122,6 +130,11 @@ async def _run_forward_job(SESSION, resilient: bool = False) -> None:
                 else:
                     logging.info(f"  Alt account {i} ({client_names[i]}) ✓ can access {real_name} and all destinations")
             except Exception as e:
+                if str(src) not in access_cache:
+                    access_cache[str(src)] = []
+                if uid not in access_cache[str(src)]:
+                    access_cache[str(src)].append(uid)
+
                 if i == 0:
                     logging.info(f"  Primary account ({client_names[0]}) ✗ cannot access connection (source/dest) — error: {e}")
                 else:
@@ -136,6 +149,7 @@ async def _run_forward_job(SESSION, resilient: bool = False) -> None:
             'allowed_clients': allowed_clients,
             'has_ttl': has_ttl
         })
+    config.write_access_cache(access_cache)
         
     # Sort channels by presence of delete timer, then number of allowed clients (ascending)
     # Channels with delete timers (TTL) are processed FIRST, then channels with fewest accounts

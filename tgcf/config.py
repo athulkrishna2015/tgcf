@@ -1,5 +1,6 @@
 """Load all user defined config and env vars."""
 
+import json
 import logging
 import os
 import sys
@@ -19,6 +20,23 @@ pwd = os.getcwd()
 env_file = os.path.join(pwd, ".env")
 
 load_dotenv(env_file)
+
+ACCESS_CACHE_FILE = "tgcf.access.json"
+
+
+def read_access_cache():
+    if os.path.exists(ACCESS_CACHE_FILE):
+        try:
+            with open(ACCESS_CACHE_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+
+def write_access_cache(cache):
+    with open(ACCESS_CACHE_FILE, "w") as f:
+        json.dump(cache, f, indent=4)
 
 
 class Forward(BaseModel):
