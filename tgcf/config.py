@@ -1,5 +1,6 @@
 """Load all user defined config and env vars."""
 
+import asyncio
 import json
 import logging
 import os
@@ -262,30 +263,14 @@ async def get_id(client: TelegramClient, peer):
 async def load_from_to(
     client: TelegramClient, forwards: List[Forward]
 ) -> Dict[int, List[int]]:
-    """Convert a list of Forward objects to a mapping.
-
-    Args:
-        client: Instance of Telegram client (logged in)
-        forwards: List of Forward objects
-
-    Returns:
-        Dict: key = chat id of source
-                value = List of chat ids of destinations
-
-    Notes:
-    -> The Forward objects may contain username/phn no/links
-    -> But this mapping strictly contains signed integer chat ids
-    -> Chat ids are essential for how storage is implemented
-    -> Storage is essential for edit, delete and reply syncs
-    """
-    from_to_dict = {}
+    """Convert a list of Forward objects to a mapping."""
     global from_to_forwards
     from_to_forwards = {}
 
-    async def _(peer):
+    async def get_id_local(peer):
         return await get_id(client, peer)
 
-    for forward in forwards:
+    async def process_forward(forward):
         if isinstance(forward, dict):
             use_this = forward.get("use_this", True)
             source = forward.get("source")
@@ -296,16 +281,16 @@ async def load_from_to(
             dest = forward.dest
 
         if not use_this:
-            continue
+            return None
         if isinstance(source, str):
             if source.strip() == "":
-                continue
+                return None
             try:
                 source = int(source)
             except ValueError:
                 pass
 
-        src = await _(source)
+        src = await get_id_local(source)
         try:
             src_entity = await client.get_entity(src)
             source_name = getattr(src_entity, "title", getattr(src_entity, "username", str(src)))
@@ -321,28 +306,42 @@ async def load_from_to(
 
         cleaned_dest = []
         dest_names = []
-        for d in dest:
+
+        async def get_dest_info(d):
             if isinstance(d, str):
                 try:
                     d = int(d)
                 except ValueError:
                     pass
-            id_ = await _(d)
-            cleaned_dest.append(id_)
+            id_ = await get_id_local(d)
+            name = str(id_)
             try:
                 dest_entity = await client.get_entity(id_)
-                dest_names.append(
-                    getattr(dest_entity, "title", getattr(dest_entity, "username", str(id_)))
-                )
+                name = getattr(dest_entity, "title", getattr(dest_entity, "username", str(id_)))
             except Exception:
-                dest_names.append(str(id_))
+                pass
+            return id_, name
+
+        dest_results = await asyncio.gather(*(get_dest_info(d) for d in dest))
+        for id_, name in dest_results:
+            cleaned_dest.append(id_)
+            dest_names.append(name)
 
         if isinstance(forward, dict):
             forward["dest_names"] = dest_names
         else:
             forward.dest_names = dest_names
 
-        from_to_dict[src] = cleaned_dest
+        return src, cleaned_dest
+
+    results = await asyncio.gather(*(process_forward(f) for f in forwards))
+    
+    from_to_dict = {}
+    for res in results:
+        if res:
+            src, cleaned_dest = res
+            from_to_dict[src] = cleaned_dest
+
     write_config(CONFIG)
     logging.info(f"From to dict is {from_to_dict}")
     return from_to_dict

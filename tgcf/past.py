@@ -81,91 +81,66 @@ async def _run_forward_job(SESSION, resilient: bool = False, clear_cache: bool =
             flood_until.append(0.0)
             logging.info(f"Loaded alternate session {idx + 1}")
 
-    client_names = []
-    client_user_ids = []
-    for i, client in enumerate(clients):
+    client_names = [None] * len(clients)
+    client_user_ids = [None] * len(clients)
+
+    async def start_client(i, client):
         await client.start()
         me = await client.get_me()
-        client_user_ids.append(me.id)
-        name = getattr(me, 'first_name', '')
-        if getattr(me, 'last_name', ''):
+        client_user_ids[i] = me.id
+        name = getattr(me, "first_name", "")
+        if getattr(me, "last_name", ""):
             name += f" {me.last_name}"
-        if getattr(me, 'username', ''):
+        if getattr(me, "username", ""):
             name += f" (@{me.username})"
         if not name:
-            name = getattr(me, 'phone', f"Account {i}")
-        client_names.append(name)
-        
+            name = getattr(me, "phone", f"Account {i}")
+        client_names[i] = name
+
         if i > 0:
             logging.info(f"Alternate account {i} ({name}) connected successfully.")
         else:
             logging.info(f"Primary account ({name}) connected successfully.")
-            
+
+    await asyncio.gather(*(start_client(i, client) for i, client in enumerate(clients)))
+
     config.from_to = await config.load_from_to(primary_client, config.CONFIG.forwards)
     client = primary_client
     unavailable_channels = []
     finished_channels = []
-    # Upfront access check and smart sorting
-    logging.info("Performing upfront access checks for smart channel sorting...")
+    # Minimal upfront info for sorting (Names and TTL for Primary Account only)
+    logging.info("Fetching minimal channel info for sorting...")
     access_cache = config.read_access_cache()
-    channel_access_data = []
-    for from_to, forward in zip(config.from_to.items(), config.CONFIG.forwards):
+    channel_data_list = []
+
+    async def get_basic_info(from_to, forward):
         src, dest = from_to
-        real_name = forward.source_name
         has_ttl = False
         try:
             src_entity = await primary_client.get_entity(src)
             has_ttl = bool(getattr(src_entity, "ttl_period", 0))
         except Exception:
             pass
-        con_name = forward.con_name if forward.con_name else "Unnamed"
-        
-        allowed_clients = []
-        for i in range(len(clients)):
-            uid = client_user_ids[i]
-            if str(src) in access_cache and uid in access_cache[str(src)]:
-                logging.info(f"  Account {i} ({client_names[i]}) skipped (cached no-access for {real_name})")
-                continue
+        return {
+            "src": src,
+            "dest": dest,
+            "forward": forward,
+            "real_name": forward.source_name,
+            "con_name": forward.con_name if forward.con_name else "Unnamed",
+            "has_ttl": has_ttl,
+        }
 
-            try:
-                await clients[i].get_entity(src)
-                for d in dest:
-                    await clients[i].get_entity(d)
-                allowed_clients.append(i)
-                if i == 0:
-                    logging.info(f"  Primary account ({client_names[0]}) ✓ can access {real_name} and all destinations")
-                else:
-                    logging.info(f"  Alt account {i} ({client_names[i]}) ✓ can access {real_name} and all destinations")
-            except Exception as e:
-                if str(src) not in access_cache:
-                    access_cache[str(src)] = []
-                if uid not in access_cache[str(src)]:
-                    access_cache[str(src)].append(uid)
+    active_forwards = [f for f in config.CONFIG.forwards if f.use_this]
+    results = await asyncio.gather(
+        *(
+            get_basic_info(ft, f)
+            for ft, f in zip(config.from_to.items(), active_forwards)
+        )
+    )
+    channel_data_list = list(results)
 
-                if i == 0:
-                    logging.info(f"  Primary account ({client_names[0]}) ✗ cannot access connection (source/dest) — error: {e}")
-                else:
-                    logging.info(f"  Alt account {i} ({client_names[i]}) ✗ cannot access connection (source/dest) — error: {e}")
-        
-        channel_access_data.append({
-            'src': src,
-            'dest': dest,
-            'forward': forward,
-            'real_name': real_name,
-            'con_name': con_name,
-            'allowed_clients': allowed_clients,
-            'has_ttl': has_ttl
-        })
-    config.write_access_cache(access_cache)
-        
-    # Sort channels by presence of delete timer, then number of allowed clients (ascending)
-    # Channels with delete timers (TTL) are processed FIRST, then channels with fewest accounts
-    channel_access_data.sort(key=lambda x: (not x['has_ttl'], len(x['allowed_clients'])))
-    
-    logging.info("Smart sorting complete. Processing order:")
-    for i, data in enumerate(channel_access_data):
-        ttl_str = "[Timer] " if data['has_ttl'] else ""
-        logging.info(f"{i+1}. {ttl_str}{data['src']} - {len(data['allowed_clients'])} accounts have access")
+    # Sort channels by presence of delete timer (TTL) first
+    channel_data_list.sort(key=lambda x: not x["has_ttl"])
 
     try:
         with Progress(
@@ -174,20 +149,54 @@ async def _run_forward_job(SESSION, resilient: bool = False, clear_cache: bool =
             TextColumn("[progress.description]{task.description}"),
             TimeElapsedColumn(),
         ) as progress:
-            for channel_data in channel_access_data:
-                src = channel_data['src']
-                dest = channel_data['dest']
-                forward = channel_data['forward']
-                real_name = channel_data['real_name']
-                con_name = channel_data['con_name']
-                allowed_clients = channel_data['allowed_clients']
+            for data in channel_data_list:
+                src = data["src"]
+                dest = data["dest"]
+                forward = data["forward"]
+                real_name = data["real_name"]
+                con_name = data["con_name"]
+
+                # Lazy Client Selection
+                client = None
+                active_client_idx = -1
+                allowed_clients = []
+
+                for i in range(len(clients)):
+                    uid = client_user_ids[i]
+                    if str(src) in access_cache and uid in access_cache[str(src)]:
+                        continue
+
+                    try:
+                        await clients[i].get_entity(src)
+                        for d in dest:
+                            await clients[i].get_entity(d)
+                        
+                        # Found a working client!
+                        allowed_clients.append(i)
+                        client = clients[i]
+                        active_client_idx = i
+                        
+                        # STOP SEARCHING: If the primary (or first available) account works, we are done.
+                        break 
+                    except Exception as e:
+                        if str(src) not in access_cache:
+                            access_cache[str(src)] = []
+                        if uid not in access_cache[str(src)]:
+                            access_cache[str(src)].append(uid)
+                        logging.warning(f"  Account {i} ({client_names[i]}) cannot access {real_name}: {e}")
+                
                 if not allowed_clients:
                     name = con_name if con_name else str(src)
-                    logging.error(f"Could not process connection {name} (source={src}): No accounts have access to both source and destinations.")
+                    logging.error(f"Could not process connection {name} (source={src}): No accounts have access.")
                     unavailable_channels.append(f"{src} ({name})")
                     continue
+
+                if active_client_idx == -1:
+                    # All allowed clients are in FloodWait
+                    active_client_idx = allowed_clients[0]
+                    client = clients[active_client_idx]
+
                 last_id = 0
-                
                 stripped_id = str(src).replace("-100", "")
                 task_id = progress.add_task(
                     "Connecting...",

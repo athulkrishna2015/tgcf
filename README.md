@@ -104,6 +104,43 @@ To use it, add the following **Secrets** to your GitHub repository:
 ### Note on Persistence
 GitHub Actions does not save changes to the `tgcf.config.json` file across runs. If you need to keep track of the message `offset`, consider using the **MongoDB** integration by setting the `MONGO_CON_STR` environment variable.
 
+## Scheduled Execution (Cron)
+
+To run `tgcf` periodically on a Linux server (e.g., every 2 hours), you can configure a cron job.
+
+### Setup
+
+Open your crontab configuration editor:
+```bash
+crontab -e
+```
+
+Add the following entry (adjust paths to match your actual setup):
+```cron
+0 */2 * * * cd /mnt/0946E88701BE265B/portable/tgcf/who && .venv/bin/tgcf past --resilient --loud >> cron.log 2>&1
+```
+
+### Logging
+- **[cron.log](file:///mnt/0946E88701BE265B/portable/tgcf/who/cron.log)**: Appends standard output, stderr, and cron/shell startup errors (like interpreter problems or path issues).
+- **[tgcf.log](file:///mnt/0946E88701BE265B/portable/tgcf/who/tgcf.log)**: Native Python application logs (includes execution summaries and filter statuses).
+
+### Troubleshooting NTFS Mounts (Windows/Linux dual-boot)
+If this repository is located on a dual-boot NTFS partition, symlinks inside `.venv/bin/` (e.g., `python`, `python3`) created under Windows/WSL might show up in Linux as `unsupported reparse tag 0xa000000c`. 
+
+This will prevent cron/bash from running the wrapper scripts and throw:
+```
+bash: .venv/bin/tgcf: ...: bad interpreter: No such file or directory
+```
+
+To resolve this issue, recreate the python symlinks natively under Linux pointing to your host Python path:
+```bash
+# Recreate symlinks (e.g. pointing to /usr/bin/python3 or local uv installation)
+rm -f .venv/bin/python .venv/bin/python3 .venv/bin/python3.11
+ln -s /home/admin/.local/share/uv/python/cpython-3.11-linux-x86_64-gnu/bin/python3.11 .venv/bin/python
+ln -s python .venv/bin/python3
+ln -s python .venv/bin/python3.11
+```
+
 ## Changelog
 
 ### 2026-06-07
