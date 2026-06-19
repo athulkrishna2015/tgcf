@@ -19,7 +19,7 @@ from tgcf import config
 from tgcf import storage as st
 from tgcf.config import CONFIG, get_SESSION, write_config
 from tgcf.plugins import apply_plugins
-from tgcf.utils import clean_session_files, send_message, is_batching_safe, get_proxy_config
+from tgcf.utils import clean_session_files, send_message, is_batching_safe, get_proxy_config, update_proxies_from_channel
 
 
 NETWORK_RETRY_DELAY = 30  # seconds to wait before retrying after a network error
@@ -53,7 +53,7 @@ async def _run_forward_job(SESSION, resilient: bool = False, clear_cache: bool =
     """Core forwarding logic — runs one full pass through all channels."""
     from telethon.sessions import StringSession
     # connection_retries=-1 means Telethon retries forever (used in resilient mode)
-    connection_retries = -1 if resilient else 5
+    actual_retries = -1 if resilient else 5
     if resilient:
         logging.info(
             "Resilient mode ON: will retry connecting indefinitely if network drops."
@@ -61,50 +61,82 @@ async def _run_forward_job(SESSION, resilient: bool = False, clear_cache: bool =
         
     clients = []
     flood_until = []
-    
-    primary_client = TelegramClient(
-        SESSION, CONFIG.login.API_ID, CONFIG.login.API_HASH,
-        connection_retries=connection_retries,
-        retry_delay=30,
-        **get_proxy_config()
-    )
-    clients.append(primary_client)
-    flood_until.append(0.0)
-    
-    for idx, alt_session in enumerate(CONFIG.login.ALT_SESSION_STRINGS):
-        if alt_session.strip():
-            alt_client = TelegramClient(
-                StringSession(alt_session.strip()), CONFIG.login.API_ID, CONFIG.login.API_HASH,
-                connection_retries=connection_retries,
-                retry_delay=30,
-                **get_proxy_config()
-            )
-            clients.append(alt_client)
-            flood_until.append(0.0)
-            logging.info(f"Loaded alternate session {idx + 1}")
+    client_names = []
+    client_user_ids = []
+    primary_client = None
 
-    client_names = [None] * len(clients)
-    client_user_ids = [None] * len(clients)
+    max_retries = 10
+    for attempt in range(max_retries):
+        clients = []
+        flood_until = []
+        
+        proxy_config = get_proxy_config()
+        primary_client = TelegramClient(
+            SESSION, CONFIG.login.API_ID, CONFIG.login.API_HASH,
+            connection_retries=2,
+            retry_delay=2,
+            auto_reconnect=False,
+            **proxy_config
+        )
+        clients.append(primary_client)
+        flood_until.append(0.0)
+        
+        for idx, alt_session in enumerate(CONFIG.login.ALT_SESSION_STRINGS):
+            if alt_session.strip():
+                alt_client = TelegramClient(
+                    StringSession(alt_session.strip()), CONFIG.login.API_ID, CONFIG.login.API_HASH,
+                    connection_retries=2,
+                    retry_delay=2,
+                    auto_reconnect=False,
+                    **proxy_config
+                )
+                clients.append(alt_client)
+                flood_until.append(0.0)
+                logging.info(f"Loaded alternate session {idx + 1}")
 
-    async def start_client(i, client):
-        await client.start()
-        me = await client.get_me()
-        client_user_ids[i] = me.id
-        name = getattr(me, "first_name", "")
-        if getattr(me, "last_name", ""):
-            name += f" {me.last_name}"
-        if getattr(me, "username", ""):
-            name += f" (@{me.username})"
-        if not name:
-            name = getattr(me, "phone", f"Account {i}")
-        client_names[i] = name
+        client_names = [None] * len(clients)
+        client_user_ids = [None] * len(clients)
 
-        if i > 0:
-            logging.info(f"Alternate account {i} ({name}) connected successfully.")
-        else:
-            logging.info(f"Primary account ({name}) connected successfully.")
+        async def start_client(i, client):
+            await client.start()
+            me = await client.get_me()
+            client_user_ids[i] = me.id
+            name = getattr(me, "first_name", "")
+            if getattr(me, "last_name", ""):
+                name += f" {me.last_name}"
+            if getattr(me, "username", ""):
+                name += f" (@{me.username})"
+            if not name:
+                name = getattr(me, "phone", f"Account {i}")
+            client_names[i] = name
 
-    await asyncio.gather(*(start_client(i, client) for i, client in enumerate(clients)))
+            if i > 0:
+                logging.info(f"Alternate account {i} ({name}) connected successfully.")
+            else:
+                logging.info(f"Primary account ({name}) connected successfully.")
+
+        try:
+            await asyncio.gather(*(start_client(i, client) for i, client in enumerate(clients)))
+            # Set the actual connection retries for the rest of the execution
+            for c in clients:
+                c._connection_retries = actual_retries
+                c._retry_delay = 30
+                c._auto_reconnect = True
+            asyncio.create_task(update_proxies_from_channel(primary_client))
+            break  # Success!
+        except Exception as e:
+            logging.warning(f"Connection attempt {attempt + 1} failed: {e}")
+            from tgcf.utils import invalidate_proxy
+            invalidate_proxy()
+            for c in clients:
+                try:
+                    await c.disconnect()
+                except Exception:
+                    pass
+            if attempt == max_retries - 1:
+                logging.error("Failed to connect after all proxy retries.")
+                raise e
+            logging.info("Retrying with a different proxy...")
 
     config.from_to = await config.load_from_to(primary_client, config.CONFIG.forwards)
     client = primary_client

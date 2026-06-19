@@ -12,7 +12,7 @@ from tgcf import storage as st
 from tgcf.bot import get_events
 from tgcf.config import CONFIG, get_SESSION
 from tgcf.plugins import apply_plugins
-from tgcf.utils import clean_session_files, send_message, get_proxy_config
+from tgcf.utils import clean_session_files, send_message, get_proxy_config, update_proxies_from_channel
 
 
 async def new_message_handler(event: Union[Message, events.NewMessage]) -> None:
@@ -125,20 +125,49 @@ async def start_sync() -> None:
     clean_session_files()
 
     SESSION = get_SESSION()
-    client = TelegramClient(
-        SESSION,
-        CONFIG.login.API_ID,
-        CONFIG.login.API_HASH,
-        sequential_updates=CONFIG.live.sequential_updates,
-        **get_proxy_config(),
-    )
-    if CONFIG.login.user_type == 0:
-        if CONFIG.login.BOT_TOKEN == "":
-            logging.warning("Bot token not found, but login type is set to bot.")
-            sys.exit()
-        await client.start(bot_token=CONFIG.login.BOT_TOKEN)
-    else:
-        await client.start()
+    client = None
+    max_retries = 10
+    for attempt in range(max_retries):
+        client = TelegramClient(
+            SESSION,
+            CONFIG.login.API_ID,
+            CONFIG.login.API_HASH,
+            sequential_updates=CONFIG.live.sequential_updates,
+            connection_retries=2,
+            retry_delay=2,
+            auto_reconnect=False,
+            **get_proxy_config(),
+        )
+        try:
+            if CONFIG.login.user_type == 0:
+                if CONFIG.login.BOT_TOKEN == "":
+                    logging.warning("Bot token not found, but login type is set to bot.")
+                    sys.exit()
+                await client.start(bot_token=CONFIG.login.BOT_TOKEN)
+            else:
+                await client.start()
+            
+            # Set connection retries to infinite for live mode runtime
+            client._connection_retries = -1
+            client._retry_delay = 30
+            client._auto_reconnect = True
+            
+            import asyncio
+            asyncio.create_task(update_proxies_from_channel(client))
+            break  # Success!
+        except Exception as e:
+            logging.warning(f"Connection attempt {attempt + 1} failed: {e}")
+            from tgcf.utils import invalidate_proxy
+            invalidate_proxy()
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
+            if attempt == max_retries - 1:
+                logging.error("Failed to connect after all proxy retries.")
+                raise e
+            logging.info("Retrying with a different proxy...")
+
     config.is_bot = await client.is_bot()
     logging.info(f"config.is_bot={config.is_bot}")
     command_events = get_events()

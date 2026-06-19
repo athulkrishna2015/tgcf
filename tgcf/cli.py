@@ -133,6 +133,18 @@ def main(
         "--clear-cache",
         help="(past mode only) Delete the access cache before starting.",
     ),
+    proxy_check_timeout: float = typer.Option(
+        1.5,
+        "--proxy-check-timeout",
+        help="Timeout in seconds to check if a proxy is alive.",
+        envvar="TGCF_PROXY_CHECK_TIMEOUT",
+    ),
+    direct_check_timeout: float = typer.Option(
+        2.0,
+        "--direct-check-timeout",
+        help="Timeout in seconds to check direct connection to Telegram.",
+        envvar="TGCF_DIRECT_CHECK_TIMEOUT",
+    ),
 ):
     """The ultimate tool to automate custom telegram message forwarding.
 
@@ -142,6 +154,9 @@ def main(
 
     To run web interface run `tgcf-web` command.
     """
+    os.environ["TGCF_PROXY_CHECK_TIMEOUT"] = str(proxy_check_timeout)
+    os.environ["TGCF_DIRECT_CHECK_TIMEOUT"] = str(direct_check_timeout)
+
     if FAKE:
         logging.critical(f"You are running fake with {mode} mode")
         sys.exit(1)

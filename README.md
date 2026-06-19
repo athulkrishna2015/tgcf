@@ -13,7 +13,7 @@ A customized version of `tgcf` for automated telegram message forwarding.
 - **Smart Channel Sorting**: automatically prioritizes processing highly-restricted channels first to maximize account availability before rate limits hit.
 - Native Batch Forwarding: automatically groups up to 100 messages per API call if no modifying plugins are active, drastically reducing rate limits.
 - **Auto-sync Channel Names**: automatically fetches and updates the actual Telegram channel names (`source_name` and `dest_names`) in `tgcf.config.json` on every run.
-- **Auto Log Rotation**: natively limits the `tgcf.log` size to 10MB (retaining at most 3 backups) to protect disk space.
+- **Dynamic Proxy Rotation & Health Tracking**: automatically tests and rotates between user-defined and public MTProto proxies to bypass regional Telegram bans. Instantly prunes non-working proxies from the local cache file to keep it clean.
 - Detailed logging: shows real Telegram channel names, message links for FloodWait retries, and a full summary on completion.
 
 ## Setup
@@ -79,6 +79,8 @@ These variables can be defined in your `.env` file:
 - `TGCF_PROXY_USER`: (Optional) Proxy username (for SOCKS5/SOCKS4/HTTP).
 - `TGCF_PROXY_PASSWORD` / `TGCF_PROXY_PASS`: (Optional) Proxy password (for SOCKS5/SOCKS4/HTTP).
 - `TGCF_PROXY_SECRET`: (Optional) Proxy secret key (hex-encoded string, required for `mtproto`).
+- `TGCF_PROXY_CHECK_TIMEOUT`: (Optional) Socket check timeout in seconds to verify if a proxy is alive (defaults to `1.5`).
+- `TGCF_DIRECT_CHECK_TIMEOUT`: (Optional) Timeout in seconds to verify direct connection to Telegram before attempting proxy fallback (defaults to `2.0`).
 
 ### Available File Types for Filtering
 When configuring whitelist/blacklist in the `"files"` filter plugin, use these values:
@@ -148,6 +150,12 @@ ln -s python .venv/bin/python3.11
 ```
 
 ## Changelog
+
+### 2026-06-19
+- feat(proxy): implement dynamic proxy rotation and MTProto/SOCKS auto-fallback
+- feat(proxy): track proxy health and instantly prune dead proxies (failures >= 3) from the local cache (`tgcf.proxies.json`)
+- feat(proxy): introduce `--proxy-check-timeout` and `--direct-check-timeout` options (and env variables) for customizable socket checks
+- fix(telethon): resolve indefinite hang during client connect phase by configuring `auto_reconnect=False` during startup and restoring it once connected
 
 ### 2026-06-07
 - feat(plugins): support source-specific plugin configurations (e.g. separate whitelist, blacklist, filter, replace, caption, etc.) per connection/source block in `tgcf.config.json`

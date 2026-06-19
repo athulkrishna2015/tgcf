@@ -7,6 +7,7 @@ ENV/
 .env
 tgcf.config.json
 tgcf.config_bkp.json
+tgcf.proxies.json
 *.session
 *.session-journal
 
