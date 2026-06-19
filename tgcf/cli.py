@@ -13,6 +13,7 @@ from logging.handlers import RotatingFileHandler
 from rich import console, traceback
 from rich.logging import RichHandler
 from verlat import latest_release
+from packaging.version import parse
 
 from tgcf import __version__
 
@@ -89,7 +90,7 @@ def version_callback(value: bool):
 def version_check():
     try:
         latver = latest_release("tgcf").version
-        if __version__ != latver:
+        if parse(__version__) < parse(latver):
             con.print(
                 f"tgcf has a newer release {latver} availaible!\
                 \nVisit http://bit.ly/update-tgcf",
