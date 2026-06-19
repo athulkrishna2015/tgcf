@@ -12,7 +12,7 @@ from tgcf import storage as st
 from tgcf.bot import get_events
 from tgcf.config import CONFIG, get_SESSION
 from tgcf.plugins import apply_plugins
-from tgcf.utils import clean_session_files, send_message
+from tgcf.utils import clean_session_files, send_message, get_proxy_config
 
 
 async def new_message_handler(event: Union[Message, events.NewMessage]) -> None:
@@ -130,6 +130,7 @@ async def start_sync() -> None:
         CONFIG.login.API_ID,
         CONFIG.login.API_HASH,
         sequential_updates=CONFIG.live.sequential_updates,
+        **get_proxy_config(),
     )
     if CONFIG.login.user_type == 0:
         if CONFIG.login.BOT_TOKEN == "":

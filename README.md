@@ -73,6 +73,12 @@ These variables can be defined in your `.env` file:
 - `MONGO_CON_STR`: Connection string for MongoDB (used for online config storage).
 - `MONGO_DB_NAME`: MongoDB database name (defaults to `tgcf-config`).
 - `MONGO_COL_NAME`: MongoDB collection name (defaults to `tgcf-instance-0`).
+- `TGCF_PROXY_TYPE`: (Optional) Proxy type to bypass network bans/restrictions (`socks5`, `socks4`, `http`, or `mtproto`). Defaults to `socks5`.
+- `TGCF_PROXY_HOST`: (Optional) Proxy server host (e.g. `127.0.0.1` or `proxy.example.com`).
+- `TGCF_PROXY_PORT`: (Optional) Proxy server port (e.g. `1080` or `8080`).
+- `TGCF_PROXY_USER`: (Optional) Proxy username (for SOCKS5/SOCKS4/HTTP).
+- `TGCF_PROXY_PASSWORD` / `TGCF_PROXY_PASS`: (Optional) Proxy password (for SOCKS5/SOCKS4/HTTP).
+- `TGCF_PROXY_SECRET`: (Optional) Proxy secret key (hex-encoded string, required for `mtproto`).
 
 ### Available File Types for Filtering
 When configuring whitelist/blacklist in the `"files"` filter plugin, use these values:

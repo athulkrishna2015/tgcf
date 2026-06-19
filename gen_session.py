@@ -12,10 +12,13 @@ print("Please enter your phone number and the login code you receive on Telegram
 print("-" * 50)
 
 import asyncio
+from dotenv import load_dotenv
+load_dotenv(".env")
+from tgcf.utils import get_proxy_config
 
 async def main():
     # Create a new client and authenticate
-    client = TelegramClient(StringSession(), int(API_ID), API_HASH)
+    client = TelegramClient(StringSession(), int(API_ID), API_HASH, **get_proxy_config())
     await client.start()
     
     print("-" * 50)

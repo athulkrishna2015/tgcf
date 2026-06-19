@@ -19,7 +19,7 @@ from tgcf import config
 from tgcf import storage as st
 from tgcf.config import CONFIG, get_SESSION, write_config
 from tgcf.plugins import apply_plugins
-from tgcf.utils import clean_session_files, send_message, is_batching_safe
+from tgcf.utils import clean_session_files, send_message, is_batching_safe, get_proxy_config
 
 
 NETWORK_RETRY_DELAY = 30  # seconds to wait before retrying after a network error
@@ -66,6 +66,7 @@ async def _run_forward_job(SESSION, resilient: bool = False, clear_cache: bool =
         SESSION, CONFIG.login.API_ID, CONFIG.login.API_HASH,
         connection_retries=connection_retries,
         retry_delay=30,
+        **get_proxy_config()
     )
     clients.append(primary_client)
     flood_until.append(0.0)
@@ -76,6 +77,7 @@ async def _run_forward_job(SESSION, resilient: bool = False, clear_cache: bool =
                 StringSession(alt_session.strip()), CONFIG.login.API_ID, CONFIG.login.API_HASH,
                 connection_retries=connection_retries,
                 retry_delay=30,
+                **get_proxy_config()
             )
             clients.append(alt_client)
             flood_until.append(0.0)

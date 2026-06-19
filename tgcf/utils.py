@@ -118,3 +118,55 @@ def clean_session_files():
     for item in os.listdir():
         if item.endswith(".session") or item.endswith(".session-journal"):
             os.remove(item)
+
+
+def get_proxy_config():
+    """Get proxy configuration for Telethon TelegramClient."""
+    proxy_host = os.getenv("TGCF_PROXY_HOST")
+    proxy_port = os.getenv("TGCF_PROXY_PORT")
+    proxy_type_str = os.getenv("TGCF_PROXY_TYPE", "").lower()
+    
+    if not proxy_host or not proxy_port:
+        return {}
+
+    try:
+        proxy_port = int(proxy_port)
+    except ValueError:
+        logging.warning("TGCF_PROXY_PORT must be an integer.")
+        return {}
+
+    if proxy_type_str == "mtproto":
+        proxy_secret = os.getenv("TGCF_PROXY_SECRET")
+        if not proxy_secret:
+            logging.warning("TGCF_PROXY_SECRET is required for mtproto proxy.")
+            return {}
+        
+        from telethon.network.connection import ConnectionTcpMTProxyRandomizedIntermediate
+        return {
+            "connection": ConnectionTcpMTProxyRandomizedIntermediate,
+            "proxy": (proxy_host, proxy_port, proxy_secret)
+        }
+    
+    proxy_user = os.getenv("TGCF_PROXY_USER")
+    proxy_pass = os.getenv("TGCF_PROXY_PASSWORD") or os.getenv("TGCF_PROXY_PASS")
+
+    proxy_types = {
+        "socks5": "socks5",
+        "socks4": "socks4",
+        "http": "http",
+    }
+    proxy_type = proxy_types.get(proxy_type_str, "socks5")
+
+    proxy_dict = {
+        "proxy_type": proxy_type,
+        "addr": proxy_host,
+        "port": proxy_port,
+        "rdns": True
+    }
+    if proxy_user:
+        proxy_dict["username"] = proxy_user
+    if proxy_pass:
+        proxy_dict["password"] = proxy_pass
+
+    return {"proxy": proxy_dict}
+
