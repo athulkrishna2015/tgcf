@@ -12,7 +12,8 @@ tgcf.proxies.json
 *.session-journal
 
 # Logs and Temp
-*.log
+*.log*
+tgcf.lock
 *.txt
 !requirements.txt
 __pycache__/

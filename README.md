@@ -123,9 +123,13 @@ Open your crontab configuration editor:
 crontab -e
 ```
 
-Add the following entry (adjust paths to match your actual setup):
+Add the following entries (adjust paths to match your actual setup) to schedule it on boot and every 2 hours with `flock` to prevent concurrent conflicts:
 ```cron
-0 */2 * * * cd /mnt/0946E88701BE265B/portable/tgcf/who && .venv/bin/tgcf past --resilient --loud >> cron.log 2>&1
+# Run at boot, exit if another run is already active
+@reboot cd /mnt/0946E88701BE265B/portable/tgcf/who && flock -n tgcf.lock .venv/bin/tgcf past --resilient --loud >> cron.log 2>&1
+
+# Run every 2 hours, exit if another run is already active
+0 */2 * * * cd /mnt/0946E88701BE265B/portable/tgcf/who && flock -n tgcf.lock .venv/bin/tgcf past --resilient --loud >> cron.log 2>&1
 ```
 
 ### Logging
