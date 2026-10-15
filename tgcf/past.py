@@ -305,6 +305,16 @@ async def _run_forward_job(SESSION, resilient: bool = False, clear_cache: bool =
                     client = clients[active_client_idx]
 
                 last_id = 0
+                # Highest message id we have looked at. Tracked separately from
+                # last_id (last *forwarded*) because messages dropped by the
+                # filter plugin are handled correctly by being skipped - but the
+                # watermark still has to move past them, or every run re-fetches
+                # the same filtered messages forever.
+                seen_id = forward.offset or 0
+                # Set if a batch was abandoned after exhausting retries. In that
+                # case messages are genuinely unforwarded, so the watermark must
+                # NOT be advanced past them.
+                abandoned = False
                 stripped_id = str(src).replace("-100", "")
                 task_id = progress.add_task(
                     "Connecting...",
@@ -317,7 +327,7 @@ async def _run_forward_job(SESSION, resilient: bool = False, clear_cache: bool =
                     batch = []
                     
                     async def flush_batch():
-                        nonlocal batch, last_id
+                        nonlocal batch, last_id, abandoned
                         if not batch: return
                         transient_tries = 0
 
@@ -388,6 +398,7 @@ async def _run_forward_job(SESSION, resilient: bool = False, clear_cache: bool =
                                         f"Giving up on batch ending in {batch[-1].id} after "
                                         f"{transient_tries} transient errors: {err}"
                                     )
+                                    abandoned = True
                                     batch.clear()
                                     break
                                 logging.warning(
@@ -528,7 +539,9 @@ async def _run_forward_job(SESSION, resilient: bool = False, clear_cache: bool =
                             continue
                         if isinstance(message, MessageService):
                             continue
-                            
+
+                        seen_id = message.id
+
                         if batch_safe:
                             tm = await apply_plugins(message)
                             if not tm:
@@ -541,6 +554,17 @@ async def _run_forward_job(SESSION, resilient: bool = False, clear_cache: bool =
                             
                     if batch_safe and batch:
                         await flush_batch()
+
+                    # Move the watermark past everything we looked at. Messages
+                    # dropped by the filter plugin were handled by being skipped,
+                    # so counting them as done is correct - and stops the same
+                    # filtered messages being re-fetched on every future run.
+                    if not abandoned and seen_id > (forward.offset or 0):
+                        logging.debug(
+                            f"Advancing watermark for {src}: {forward.offset} -> {seen_id}"
+                        )
+                        forward.offset = seen_id
+                        write_config(CONFIG, persist=False)
 
                     finished_channels.append(f"{src} ({real_name} / {con_name})")
                     progress.update(task_id, description="[bold green]Finished[/bold green]", visible=False)
