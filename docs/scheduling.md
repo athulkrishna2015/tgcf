@@ -35,14 +35,13 @@ Credentials still belong in repository secrets rather than the config file:
 
 GitHub-hosted runners are free and unlimited on **public** repositories. A
 **private** repo draws on your plan's allowance — 2,000 minutes/month on GitHub
-Free. An hourly `tgcf past` run costs roughly **1,150 minutes/month**, around
-58% of that.
+Free. Runs are typically 1–2 minutes, so an hourly schedule costs roughly 1,150
+minutes/month (58%) and a twice-daily schedule roughly 100–200 (5–10%).
 
 The failure mode matters: with no payment method on file, exceeding the quota
 **blocks Actions entirely** rather than billing you, so forwarding stops silently.
-Two ways to stay safe — run less often (every 2 or 4 hours roughly halves or
-quarters the usage and matches the cron setup below), or add a payment method
-with a hard budget. Overage is cheap at $0.006 per Linux minute.
+Run less often than the quota allows, or add a payment method with a hard
+budget. Overage is cheap at $0.006 per Linux minute.
 
 ### Configuration
 Add these **Secrets** to the runner repository (not to this one):
