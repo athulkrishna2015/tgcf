@@ -10,7 +10,18 @@ import os
 import time
 
 from telethon import TelegramClient
-from telethon.errors.rpcerrorlist import ChatForwardsRestrictedError, FloodWaitError
+from telethon.errors.rpcerrorlist import (
+    ChannelPrivateError,
+    ChatAdminRequiredError,
+    ChatForwardsRestrictedError,
+    ChatWriteForbiddenError,
+    FloodPremiumWaitError,
+    FloodWaitError,
+    ServerError,
+    UsernameNotOccupiedError,
+    UserNotParticipantError,
+    WorkerBusyTooLongRetryError,
+)
 from telethon.tl.custom.message import Message
 from telethon.tl.patched import MessageService
 
@@ -23,6 +34,60 @@ from tgcf.utils import clean_session_files, send_message, is_batching_safe, get_
 
 
 NETWORK_RETRY_DELAY = 30  # seconds to wait before retrying after a network error
+
+# Telegram raises these when its workers are saturated (e.g.
+# WorkerBusyTooLongRetryError: "Telegram workers are too busy to respond
+# immediately"). They are transient and carry NO wait time - the only correct
+# response is a short backoff and a retry on the same account. Previously they
+# fell through to the generic handler, which aborted the whole channel for the
+# run, so a brief server hiccup silently stranded every pending message.
+TRANSIENT_ERRORS = (
+    WorkerBusyTooLongRetryError,
+    ServerError,
+)
+
+# Both carry a `.seconds` wait. FloodPremiumWaitError is raised on premium
+# accounts for the same reason as FloodWaitError and must be handled the same
+# way, or it too falls through to the fatal path.
+FLOOD_ERRORS = (
+    FloodWaitError,
+    FloodPremiumWaitError,
+)
+
+TRANSIENT_BACKOFF = 10  # seconds to wait before retrying a saturated request
+MAX_TRANSIENT_RETRIES = 12  # ~2 minutes of backoff before giving up on one message
+
+# Errors meaning "we cannot reach this channel" rather than "something went
+# wrong while forwarding". The former is a standing condition only the operator
+# can fix (re-join the channel, fix the id); it is reported but must NOT fail
+# the run, or a permanently-dead source would keep the build red forever.
+#
+# ValueError is in this set because Telethon raises it from entity resolution
+# ("Could not find the input entity for PeerChannel(...)") rather than an RPC
+# error type - it is what an unreachable channel actually looks like.
+ACCESS_ERRORS = (
+    ChannelPrivateError,
+    ChatAdminRequiredError,
+    ChatWriteForbiddenError,
+    UsernameNotOccupiedError,
+    UserNotParticipantError,
+)
+
+# Telethon raises a bare ValueError from entity resolution ("Could not find the
+# input entity for PeerChannel(...)") rather than an RPC error type, so the
+# exception type alone cannot identify it. Matching on the message instead of
+# treating every ValueError as "inaccessible" - that would mask real bugs.
+_ENTITY_ERROR_MARKERS = ("could not find the input entity", "access to entity")
+
+
+def is_access_error(err: Exception) -> bool:
+    """True if err means the channel is unreachable, not that forwarding broke."""
+    if isinstance(err, ACCESS_ERRORS):
+        return True
+    if isinstance(err, ValueError):
+        message = str(err).lower()
+        return any(marker in message for marker in _ENTITY_ERROR_MARKERS)
+    return False
 
 
 async def forward_job(resilient: bool = False, clear_cache: bool = False) -> None:
@@ -46,7 +111,15 @@ async def forward_job(resilient: bool = False, clear_cache: bool = False) -> Non
         )
         return
     SESSION = get_SESSION()
-    await _run_forward_job(SESSION, resilient=resilient, clear_cache=clear_cache)
+    failed = await _run_forward_job(
+        SESSION, resilient=resilient, clear_cache=clear_cache
+    )
+    if failed:
+        # Exit non-zero so a failed cycle shows up as a red build instead of
+        # looking identical to a run that simply had nothing to do.
+        raise SystemExit(
+            f"{len(failed)} channel(s) failed while forwarding: {', '.join(failed)}"
+        )
 
 
 async def _run_forward_job(SESSION, resilient: bool = False, clear_cache: bool = False) -> None:
@@ -141,6 +214,7 @@ async def _run_forward_job(SESSION, resilient: bool = False, clear_cache: bool =
     config.from_to = await config.load_from_to(primary_client, config.CONFIG.forwards)
     client = primary_client
     unavailable_channels = []
+    skipped_channels = []
     finished_channels = []
     # Minimal upfront info for sorting (Names and TTL for Primary Account only)
     logging.info("Fetching minimal channel info for sorting...")
@@ -245,7 +319,8 @@ async def _run_forward_job(SESSION, resilient: bool = False, clear_cache: bool =
                     async def flush_batch():
                         nonlocal batch, last_id
                         if not batch: return
-                        
+                        transient_tries = 0
+
                         while True:
                             try:
                                 now = time.time()
@@ -303,15 +378,35 @@ async def _run_forward_job(SESSION, resilient: bool = False, clear_cache: bool =
                                 write_config(CONFIG, persist=False)
                                 batch.clear()
                                 break
-                            except FloodWaitError as fwe:
+                            except FLOOD_ERRORS as fwe:
                                 logging.warning(f"Account {active_client_idx} hit FloodWait: sleeping for {fwe.seconds}s before retrying")
                                 flood_until[active_client_idx] = time.time() + fwe.seconds
+                            except TRANSIENT_ERRORS as err:
+                                transient_tries += 1
+                                if transient_tries > MAX_TRANSIENT_RETRIES:
+                                    logging.error(
+                                        f"Giving up on batch ending in {batch[-1].id} after "
+                                        f"{transient_tries} transient errors: {err}"
+                                    )
+                                    batch.clear()
+                                    break
+                                logging.warning(
+                                    f"Transient {type(err).__name__} on batch; retrying in "
+                                    f"{TRANSIENT_BACKOFF}s ({transient_tries}/{MAX_TRANSIENT_RETRIES})"
+                                )
+                                time.sleep(TRANSIENT_BACKOFF)
+                                continue
                             except Exception as err:
                                 logging.warning(f"Batch forward failed, falling back to one-by-one. Error: {err}")
-                                # Fallback one by one
-                                for m in batch:
-                                    await process_one(m)
+                                # Fallback one by one. Each message is guarded so a single
+                                # bad message cannot abort the remainder of the channel.
+                                pending = list(batch)
                                 batch.clear()
+                                for m in pending:
+                                    try:
+                                        await process_one(m)
+                                    except Exception as one_err:
+                                        logging.error(f"Skipping message {m.id}: {one_err}")
                                 break
                                 
                     async def process_one(message):
@@ -320,6 +415,7 @@ async def _run_forward_job(SESSION, resilient: bool = False, clear_cache: bool =
                         event_uid = st.EventUid(event)
 
                         r_event_uid = None
+                        tries = 0
                         while True:
                             try:
                                 # 1. Determine active client from ALLOWED clients
@@ -393,13 +489,31 @@ async def _run_forward_job(SESSION, resilient: bool = False, clear_cache: bool =
                                 write_config(CONFIG, persist=False)
                                 break  # skip this message
 
-                            except FloodWaitError as fwe:
+                            except FLOOD_ERRORS as fwe:
                                 msg_link = f"https://t.me/c/{stripped_id}/{message.id}"
                                 logging.warning(
                                     f"Account {active_client_idx} hit FloodWait: sleeping for {fwe.seconds}s before retrying — {msg_link}"
                                 )
                                 flood_until[active_client_idx] = time.time() + fwe.seconds
                                 # Loop continues to retry with the next available account
+
+                            except TRANSIENT_ERRORS as err:
+                                tries += 1
+                                if tries > MAX_TRANSIENT_RETRIES:
+                                    logging.error(
+                                        f"Giving up on message {message.id} after {tries} "
+                                        f"transient errors: {err}"
+                                    )
+                                    # Offset is deliberately not advanced: the message
+                                    # stays pending and the next run retries it.
+                                    break
+                                msg_link = f"https://t.me/c/{stripped_id}/{message.id}"
+                                logging.warning(
+                                    f"Transient {type(err).__name__} on {msg_link}; retrying in "
+                                    f"{TRANSIENT_BACKOFF}s ({tries}/{MAX_TRANSIENT_RETRIES})"
+                                )
+                                time.sleep(TRANSIENT_BACKOFF)
+                                continue
 
                             except Exception as err:
                                 logging.exception(err)
@@ -432,8 +546,17 @@ async def _run_forward_job(SESSION, resilient: bool = False, clear_cache: bool =
                     progress.update(task_id, description="[bold green]Finished[/bold green]", visible=False)
                 except Exception as err:
                     name = forward.con_name if forward.con_name else str(src)
-                    logging.error(f"Could not process connection {name} (source={src}): {err}")
-                    unavailable_channels.append(f"{src} ({name})")
+                    if is_access_error(err):
+                        # Not reachable at all. Standing condition, not a
+                        # regression - report it but do not fail the run.
+                        logging.error(
+                            f"Skipping inaccessible connection {name} (source={src}): "
+                            f"{type(err).__name__}: {err}"
+                        )
+                        skipped_channels.append(f"{src} ({name})")
+                    else:
+                        logging.error(f"Could not process connection {name} (source={src}): {err}")
+                        unavailable_channels.append(f"{src} ({name})")
                     progress.update(task_id, description="[bold red]Failed[/bold red]", visible=False)
                     continue
     
@@ -442,9 +565,14 @@ async def _run_forward_job(SESSION, resilient: bool = False, clear_cache: bool =
             for ch in finished_channels:
                 logging.info(f"  ✓ {ch}")
         if unavailable_channels:
-            logging.error("=== Unavailable channels (could not access): ===")
+            logging.error("=== Channels that failed while forwarding: ===")
             for ch in unavailable_channels:
                 logging.error(f"  ✗ {ch}")
+        if skipped_channels:
+            logging.warning("=== Inaccessible channels (skipped, needs re-join): ===")
+            for ch in skipped_channels:
+                logging.warning(f"  ⊘ {ch}")
+        return unavailable_channels
     finally:
         for client in clients:
             await client.disconnect()
