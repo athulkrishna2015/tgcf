@@ -5,19 +5,31 @@
 `tgcf past` runs on a schedule on GitHub Actions. Because the workflow must
 record which messages it has already forwarded, it commits an updated offset
 back after every run. To keep this repository's `main` clean, the workflow and
-the mutable config live in a **separate private repository**:
+the mutable config live in a **separate repository**:
 
 | Repository | Contents |
 |---|---|
-| `athulkrishna2015/tgcf` (this one, public) | Source code only. No workflow, no config. |
-| `athulkrishna2015/tgcf-runner` (private) | The workflow, `tgcf.config.json`, and the credentials. |
+| `athulkrishna2015/tgcf` (this one) | Source code only. No workflow, no config. |
+| `jifofe6294/tgcf-runner` (public) | The workflow, `tgcf.config.json`, and the credentials. |
 
 Each run checks this repository out into `app/`, copies the config in, runs
 `tgcf past`, then commits the advanced offsets back to the runner repo. Source
 changes here take effect on the next run — there is no sync step.
 
+### Why the runner repo is public
+GitHub-hosted runners are free and unlimited on public repositories. On a private
+repo this workload costs roughly **1,030 minutes/month** — just over half of the
+**2,000/month** that GitHub Free includes for private repos. If no payment method
+is on file, exceeding the quota **blocks Actions entirely** rather than billing
+you, which would silently stop forwarding. Making the runner public removes the
+ceiling.
+
+The trade is that `tgcf.config.json` is committed, so the source/destination
+channel IDs and offsets are public. Credentials are not: they are repository
+secrets, which GitHub never exposes in a public repo.
+
 ### Configuration
-Add these **Secrets** to `tgcf-runner` (not to this repository):
+Add these **Secrets** to `jifofe6294/tgcf-runner` (not to this repository):
 
 - `API_ID`: Your Telegram API ID.
 - `API_HASH`: Your Telegram API Hash.
