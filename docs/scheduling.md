@@ -2,34 +2,50 @@
 
 ## Running on GitHub Actions
 
-`tgcf past` runs on a schedule on GitHub Actions. Because the workflow must
-record which messages it has already forwarded, it commits an updated offset
-back after every run. To keep this repository's `main` clean, the workflow and
-the mutable config live in a **separate repository**:
+`tgcf past` can run on a schedule on GitHub Actions. This repository holds
+source code only — no workflow and no `tgcf.config.json` are committed here.
 
-| Repository | Contents |
-|---|---|
-| `athulkrishna2015/tgcf` (this one) | Source code only. No workflow, no config. |
-| `jifofe6294/tgcf-runner` (public) | The workflow, `tgcf.config.json`, and the credentials. |
+### Why the config cannot live in this repository
 
-Each run checks this repository out into `app/`, copies the config in, runs
-`tgcf past`, then commits the advanced offsets back to the runner repo. Source
-changes here take effect on the next run — there is no sync step.
+`tgcf` records which messages it has already forwarded as an integer offset in
+its config, and advances it after each run. The workflow has to commit that
+offset back, so the config must live somewhere the job can write to. Two
+approaches that do not work:
 
-### Why the runner repo is public
-GitHub-hosted runners are free and unlimited on public repositories. On a private
-repo this workload costs roughly **1,030 minutes/month** — just over half of the
-**2,000/month** that GitHub Free includes for private repos. If no payment method
-is on file, exceeding the quota **blocks Actions entirely** rather than billing
-you, which would silently stop forwarding. Making the runner public removes the
-ceiling.
+- **A `TGCF_CONFIG_JSON` secret.** The job rewrites `tgcf.config.json` from the
+  static secret at the start of every run, discarding the offset the previous run
+  just advanced. Every run restarts from the same point and re-posts everything
+  since. This cannot work no matter how the secret is handled.
+- **The config committed to this repository.** It works, but puts a commit from
+  `github-actions[bot]` on `main` every hour, forever, and publishes your
+  source/destination channel list.
 
-The trade is that `tgcf.config.json` is committed, so the source/destination
-channel IDs and offsets are public. Credentials are not: they are repository
-secrets, which GitHub never exposes in a public repo.
+The usual fix is a **separate private repository** holding the workflow and the
+config. Each run checks this repository out into a working directory, copies the
+config in, runs `tgcf past`, then copies the config back and commits the advanced
+offsets. Source changes here take effect on the next run with no sync step.
+
+Keep that repository **private**. Its `tgcf.config.json` lists your forwarding
+rules, including channel names and IDs, which are not things you want indexed.
+Credentials still belong in repository secrets rather than the config file:
+`write_config_to_file()` strips the `login` block, so the committed file holds no
+`API_ID`, `API_HASH`, or session string.
+
+### Note on the private-repo quota
+
+GitHub-hosted runners are free and unlimited on **public** repositories. A
+**private** repo draws on your plan's allowance — 2,000 minutes/month on GitHub
+Free. An hourly `tgcf past` run costs roughly **1,150 minutes/month**, around
+58% of that.
+
+The failure mode matters: with no payment method on file, exceeding the quota
+**blocks Actions entirely** rather than billing you, so forwarding stops silently.
+Two ways to stay safe — run less often (every 2 or 4 hours roughly halves or
+quarters the usage and matches the cron setup below), or add a payment method
+with a hard budget. Overage is cheap at $0.006 per Linux minute.
 
 ### Configuration
-Add these **Secrets** to `jifofe6294/tgcf-runner` (not to this repository):
+Add these **Secrets** to the runner repository (not to this one):
 
 - `API_ID`: Your Telegram API ID.
 - `API_HASH`: Your Telegram API Hash.
@@ -37,10 +53,9 @@ Add these **Secrets** to `jifofe6294/tgcf-runner` (not to this repository):
 - `SESSION_STRING_2`, `SESSION_STRING_3`: Alternate accounts.
 
 `SESSION_STRING_2` and `_3` are not optional. `tgcf` rotates across accounts when
-it hits a flood wait; without them it degrades to a single account.
-
-The config file itself is committed to the runner repo and carries no
-credentials — `write_config_to_file()` strips the `login` block on write.
+it hits a flood wait; without them it degrades to a single account. Note that
+channel access is per-account — a channel invisible to your primary session may
+still resolve through a secondary one.
 
 ### Do not run cron at the same time
 The cron setup below and the Actions workflow both advance the same offsets in
