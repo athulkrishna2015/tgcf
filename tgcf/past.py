@@ -10,6 +10,7 @@ import os
 import time
 
 from telethon import TelegramClient
+from telethon.errors import TimeoutError as TelethonTimeoutError
 from telethon.errors.rpcerrorlist import (
     ChannelPrivateError,
     ChatAdminRequiredError,
@@ -56,6 +57,43 @@ FLOOD_ERRORS = (
 
 TRANSIENT_BACKOFF = 10  # seconds to wait before retrying a saturated request
 MAX_TRANSIENT_RETRIES = 12  # ~2 minutes of backoff before giving up on one message
+
+# A dropped connection is transient too, but it needs different handling: the
+# client must be reconnected before it will accept requests again. Telethon
+# raises the *builtin* ConnectionError("Cannot send requests while
+# disconnected") - there is no telethon-namespaced equivalent - so previously
+# this fell through to the generic handler and every remaining channel was
+# marked failed by one network blip.
+CONNECTION_ERRORS = (
+    ConnectionError,  # builtin; covers socket/network failures via OSError
+    TelethonTimeoutError,
+    asyncio.TimeoutError,
+)
+
+
+async def reconnect(client) -> bool:
+    """Force-reconnect a disconnected client. True if it came back.
+
+    Telethon's auto-reconnect can be disabled or wedged after an unclean drop,
+    so disconnect first and reconnect explicitly rather than trusting
+    client.connect() to no-op.
+    """
+    try:
+        if client.is_connected():
+            await client.disconnect()
+    except Exception as err:  # noqa: BLE001 - best effort teardown
+        logging.debug(f"pre-reconnect disconnect raised: {err}")
+    for attempt in range(3):
+        try:
+            await asyncio.wait_for(client.connect(), timeout=30)
+            return True
+        except Exception as err:  # noqa: BLE001
+            logging.warning(
+                f"reconnect attempt {attempt + 1}/3 failed: "
+                f"{type(err).__name__}: {err}"
+            )
+            await asyncio.sleep(5 * (attempt + 1))
+    return False
 
 # Errors meaning "we cannot reach this channel" rather than "something went
 # wrong while forwarding". The former is a standing condition only the operator
@@ -315,6 +353,7 @@ async def _run_forward_job(SESSION, resilient: bool = False, clear_cache: bool =
                 # case messages are genuinely unforwarded, so the watermark must
                 # NOT be advanced past them.
                 abandoned = False
+                abandon_reason = None
                 stripped_id = str(src).replace("-100", "")
                 task_id = progress.add_task(
                     "Connecting...",
@@ -407,6 +446,34 @@ async def _run_forward_job(SESSION, resilient: bool = False, clear_cache: bool =
                                 )
                                 time.sleep(TRANSIENT_BACKOFF)
                                 continue
+                            except CONNECTION_ERRORS as err:
+                                transient_tries += 1
+                                idx = active_client_idx
+                                if transient_tries > MAX_TRANSIENT_RETRIES:
+                                    logging.error(
+                                        f"Giving up on batch ending in {batch[-1].id} after "
+                                        f"{transient_tries} connection errors: {err}"
+                                    )
+                                    abandoned = True
+                                    abandon_reason = f"connection errors: {type(err).__name__}"
+                                    batch.clear()
+                                    break
+                                logging.warning(
+                                    f"Account {idx} disconnected ({type(err).__name__}); "
+                                    f"reconnecting ({transient_tries}/{MAX_TRANSIENT_RETRIES})"
+                                )
+                                recovered = await reconnect(clients[idx])
+                                # Park the account either way, so the availability
+                                # loop prefers a healthy one while we retry.
+                                flood_until[idx] = time.time() + (30 if recovered else 180)
+                                if recovered:
+                                    time.sleep(TRANSIENT_BACKOFF)
+                                else:
+                                    logging.warning(
+                                        f"Account {idx} could not reconnect; "
+                                        "deferring to other accounts"
+                                    )
+                                continue
                             except Exception as err:
                                 logging.warning(f"Batch forward failed, falling back to one-by-one. Error: {err}")
                                 # Fallback one by one. Each message is guarded so a single
@@ -421,7 +488,7 @@ async def _run_forward_job(SESSION, resilient: bool = False, clear_cache: bool =
                                 break
                                 
                     async def process_one(message):
-                        nonlocal last_id
+                        nonlocal last_id, abandoned, abandon_reason
                         event = st.DummyEvent(message.chat_id, message.id)
                         event_uid = st.EventUid(event)
 
@@ -526,6 +593,33 @@ async def _run_forward_job(SESSION, resilient: bool = False, clear_cache: bool =
                                 time.sleep(TRANSIENT_BACKOFF)
                                 continue
 
+                            except CONNECTION_ERRORS as err:
+                                tries += 1
+                                idx = active_client_idx
+                                if tries > MAX_TRANSIENT_RETRIES:
+                                    logging.error(
+                                        f"Giving up on message {message.id} after {tries} "
+                                        f"connection errors: {err}"
+                                    )
+                                    abandoned = True
+                                    abandon_reason = f"connection errors: {type(err).__name__}"
+                                    break
+                                msg_link = f"https://t.me/c/{stripped_id}/{message.id}"
+                                logging.warning(
+                                    f"Account {idx} disconnected ({type(err).__name__}) on "
+                                    f"{msg_link}; reconnecting ({tries}/{MAX_TRANSIENT_RETRIES})"
+                                )
+                                recovered = await reconnect(clients[idx])
+                                flood_until[idx] = time.time() + (30 if recovered else 180)
+                                if recovered:
+                                    time.sleep(TRANSIENT_BACKOFF)
+                                else:
+                                    logging.warning(
+                                        f"Account {idx} could not reconnect; "
+                                        "deferring to other accounts"
+                                    )
+                                continue
+
                             except Exception as err:
                                 logging.exception(err)
                                 raise err
@@ -555,11 +649,21 @@ async def _run_forward_job(SESSION, resilient: bool = False, clear_cache: bool =
                     if batch_safe and batch:
                         await flush_batch()
 
+                    # A channel that gave up mid-flight did NOT finish: report it
+                    # as failed so the run exits non-zero rather than silently
+                    # reporting success with messages left unforwarded.
+                    if abandoned:
+                        label = f"{src} ({con_name or real_name}) [{abandon_reason}]"
+                        logging.error(f"Channel incomplete: {label}")
+                        unavailable_channels.append(label)
+                        progress.update(task_id, description="[bold red]Incomplete[/bold red]", visible=False)
+                        continue
+
                     # Move the watermark past everything we looked at. Messages
                     # dropped by the filter plugin were handled by being skipped,
                     # so counting them as done is correct - and stops the same
                     # filtered messages being re-fetched on every future run.
-                    if not abandoned and seen_id > (forward.offset or 0):
+                    if seen_id > (forward.offset or 0):
                         logging.debug(
                             f"Advancing watermark for {src}: {forward.offset} -> {seen_id}"
                         )
