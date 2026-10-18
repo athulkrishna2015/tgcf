@@ -103,6 +103,35 @@ async def reconnect(client) -> bool:
 # ValueError is in this set because Telethon raises it from entity resolution
 # ("Could not find the input entity for PeerChannel(...)") rather than an RPC
 # error type - it is what an unreachable channel actually looks like.
+async def probe_access(client, src, dest, label, attempts=3):
+    """Check an account can reach src and every destination. None means yes.
+
+    A dropped connection is NOT evidence that the account lacks access. Treating
+    it as such recorded the account in access_cache for the rest of the run, so a
+    single Errno 104 could knock out the only account able to read a channel and
+    fail it for that cycle. Retry after reconnecting; only report a genuine
+    access failure if the retries still fail.
+    """
+    last = None
+    for attempt in range(attempts):
+        try:
+            await client.get_entity(src)
+            for d in dest:
+                await client.get_entity(d)
+            return None
+        except CONNECTION_ERRORS as err:
+            last = err
+            logging.warning(
+                f"  {label} disconnected while probing ({type(err).__name__}); "
+                f"reconnecting ({attempt + 1}/{attempts})"
+            )
+            if not await reconnect(client):
+                break
+        except Exception as err:  # noqa: BLE001 - genuine access failure
+            return err
+    return last
+
+
 ACCESS_ERRORS = (
     ChannelPrivateError,
     ChatAdminRequiredError,
@@ -312,29 +341,36 @@ async def _run_forward_job(SESSION, resilient: bool = False, clear_cache: bool =
                     if str(src) in access_cache and uid in access_cache[str(src)]:
                         continue
 
-                    try:
-                        await clients[i].get_entity(src)
-                        for d in dest:
-                            await clients[i].get_entity(d)
-                        
+                    label = f"Account {i} ({client_names[i]})"
+                    err = await probe_access(clients[i], src, dest, f"{label} for {real_name}")
+                    if err is None:
                         # Found a working client!
                         allowed_clients.append(i)
                         client = clients[i]
                         active_client_idx = i
-                        
-                        # STOP SEARCHING: If the primary (or first available) account works, we are done.
-                        break 
-                    except Exception as e:
-                        if str(src) not in access_cache:
-                            access_cache[str(src)] = []
-                        if uid not in access_cache[str(src)]:
-                            access_cache[str(src)].append(uid)
-                        logging.warning(f"  Account {i} ({client_names[i]}) cannot access {real_name}: {e}")
-                
+                        # STOP SEARCHING: If the primary (or first available) account
+                        # works, we are done.
+                        break
+
+                    # Genuine access failure: remember it so later channels don't
+                    # re-probe this account needlessly.
+                    if str(src) not in access_cache:
+                        access_cache[str(src)] = []
+                    if uid not in access_cache[str(src)]:
+                        access_cache[str(src)].append(uid)
+                    logging.warning(f"  {label} cannot access {real_name}: {err}")
+
                 if not allowed_clients:
+                    # Standing condition, not a regression: one unreachable source
+                    # must not fail the whole run and hold back the other 22
+                    # channels. Reported, but non-fatal.
                     name = con_name if con_name else str(src)
-                    logging.error(f"Could not process connection {name} (source={src}): No accounts have access.")
-                    unavailable_channels.append(f"{src} ({name})")
+                    logging.error(
+                        f"Skipping inaccessible connection {name} (source={src}): "
+                        "no account has access."
+                    )
+                    skipped_channels.append(f"{src} ({name})")
+                    progress.update(task_id, description="[bold yellow]Skipped[/bold yellow]", visible=False)
                     continue
 
                 if active_client_idx == -1:
