@@ -216,6 +216,14 @@ async def _run_forward_job(SESSION, resilient: bool = False, clear_cache: bool =
             connection_retries=2,
             retry_delay=2,
             auto_reconnect=False,
+            # Past mode only reads history via iter_messages; it never needs
+            # real-time updates. Leaving the update loop on triggers Telethon's
+            # channel-diff machinery (apply_channel_difference / end_get_diff),
+            # which races on a dropped connection and raises RuntimeError
+            # ('Called end_get_diff on an entry which was not getting diff for'),
+            # taking down the whole run even though forwarding would otherwise
+            # recover.
+            receive_updates=False,
             **proxy_config
         )
         clients.append(primary_client)
@@ -228,6 +236,7 @@ async def _run_forward_job(SESSION, resilient: bool = False, clear_cache: bool =
                     connection_retries=2,
                     retry_delay=2,
                     auto_reconnect=False,
+                    receive_updates=False,
                     **proxy_config
                 )
                 clients.append(alt_client)
